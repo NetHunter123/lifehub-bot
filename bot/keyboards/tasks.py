@@ -8,6 +8,8 @@ from aiogram.filters.callback_data import CallbackData
 from enum import Enum
 from typing import Optional
 
+from bot.locales import t
+
 
 # ============== CALLBACK DATA ==============
 
@@ -30,7 +32,7 @@ class TaskCallback(CallbackData, prefix="task"):
 class PriorityCallback(CallbackData, prefix="pri"):
     """Callback data для вибору пріоритету."""
     priority: int
-    task_id: Optional[int] = None  # None = нова задача
+    task_id: Optional[int] = None
 
 
 class DeadlineCallback(CallbackData, prefix="ddl"):
@@ -41,15 +43,15 @@ class DeadlineCallback(CallbackData, prefix="ddl"):
 
 # ============== КЛАВІАТУРИ ==============
 
-def get_priority_keyboard(task_id: Optional[int] = None) -> InlineKeyboardMarkup:
+def get_priority_keyboard(lang: str = 'en', task_id: Optional[int] = None) -> InlineKeyboardMarkup:
     """Клавіатура вибору пріоритету."""
     builder = InlineKeyboardBuilder()
     
     priorities = [
-        ("🔴 Терміново", 0),
-        ("🟠 Високий", 1),
-        ("🟡 Середній", 2),
-        ("🟢 Низький", 3),
+        (t("priority_urgent", lang), 0),
+        (t("priority_high", lang), 1),
+        (t("priority_medium", lang), 2),
+        (t("priority_low", lang), 3),
     ]
     
     for text, priority in priorities:
@@ -58,20 +60,20 @@ def get_priority_keyboard(task_id: Optional[int] = None) -> InlineKeyboardMarkup
             callback_data=PriorityCallback(priority=priority, task_id=task_id).pack()
         ))
     
-    builder.adjust(2)  # 2 кнопки в ряд
+    builder.adjust(2)
     return builder.as_markup()
 
 
-def get_deadline_keyboard(task_id: Optional[int] = None) -> InlineKeyboardMarkup:
+def get_deadline_keyboard(lang: str = 'en', task_id: Optional[int] = None) -> InlineKeyboardMarkup:
     """Клавіатура вибору дедлайну."""
     builder = InlineKeyboardBuilder()
     
     options = [
-        ("📅 Сьогодні", "today"),
-        ("📆 Завтра", "tomorrow"),
-        ("🗓 Цей тиждень", "week"),
-        ("✏️ Обрати дату", "pick"),
-        ("❌ Без дедлайну", "none"),
+        (t("deadline_today", lang), "today"),
+        (t("deadline_tomorrow", lang), "tomorrow"),
+        (t("deadline_week", lang), "week"),
+        (t("deadline_pick", lang), "pick"),
+        (t("deadline_none", lang), "none"),
     ]
     
     for text, option in options:
@@ -84,23 +86,23 @@ def get_deadline_keyboard(task_id: Optional[int] = None) -> InlineKeyboardMarkup
     return builder.as_markup()
 
 
-def get_task_actions_keyboard(task_id: int) -> InlineKeyboardMarkup:
+def get_task_actions_keyboard(task_id: int, lang: str = 'en') -> InlineKeyboardMarkup:
     """Клавіатура дій з конкретною задачею."""
     builder = InlineKeyboardBuilder()
     
     builder.row(
         InlineKeyboardButton(
-            text="✅ Виконано",
+            text=t("btn_done", lang),
             callback_data=TaskCallback(action=TaskAction.complete, task_id=task_id).pack()
         ),
         InlineKeyboardButton(
-            text="✏️ Редагувати",
+            text=t("btn_edit", lang),
             callback_data=TaskCallback(action=TaskAction.edit, task_id=task_id).pack()
         )
     )
     builder.row(
         InlineKeyboardButton(
-            text="🗑 Видалити",
+            text=t("btn_delete", lang),
             callback_data=TaskCallback(action=TaskAction.delete, task_id=task_id).pack()
         )
     )
@@ -108,7 +110,7 @@ def get_task_actions_keyboard(task_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_tasks_list_keyboard(tasks: list, page: int = 0, per_page: int = 5) -> InlineKeyboardMarkup:
+def get_tasks_list_keyboard(tasks: list, lang: str = 'en', page: int = 0, per_page: int = 5) -> InlineKeyboardMarkup:
     """Клавіатура зі списком задач + пагінація."""
     builder = InlineKeyboardBuilder()
     
@@ -118,7 +120,6 @@ def get_tasks_list_keyboard(tasks: list, page: int = 0, per_page: int = 5) -> In
     page_tasks = tasks[start:end]
     
     for task in page_tasks:
-        # Емодзі пріоритету
         priority_emoji = ["🔴", "🟠", "🟡", "🟢"][task["priority"]]
         status_emoji = "✅" if task["is_completed"] else "⬜"
         
@@ -139,18 +140,18 @@ def get_tasks_list_keyboard(tasks: list, page: int = 0, per_page: int = 5) -> In
         builder.row(*nav_buttons)
     
     # Кнопка додавання
-    builder.row(InlineKeyboardButton(text="➕ Додати задачу", callback_data="task:add"))
+    builder.row(InlineKeyboardButton(text=t("btn_add_task", lang), callback_data="task:add"))
     
     return builder.as_markup()
 
 
-def get_confirm_keyboard(task_id: int, action: str) -> InlineKeyboardMarkup:
+def get_confirm_keyboard(task_id: int, action: str, lang: str = 'en') -> InlineKeyboardMarkup:
     """Клавіатура підтвердження дії."""
     builder = InlineKeyboardBuilder()
     
     builder.row(
-        InlineKeyboardButton(text="✅ Так", callback_data=f"confirm:{action}:{task_id}"),
-        InlineKeyboardButton(text="❌ Ні", callback_data="cancel")
+        InlineKeyboardButton(text=t("btn_yes", lang), callback_data=f"confirm:{action}:{task_id}"),
+        InlineKeyboardButton(text=t("btn_no", lang), callback_data="cancel")
     )
     
     return builder.as_markup()
