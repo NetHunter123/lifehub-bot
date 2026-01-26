@@ -2,9 +2,10 @@
 Обробники команд для роботи з задачами.
 """
 
+import re
 from datetime import datetime, date, timedelta
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 
@@ -17,6 +18,7 @@ from bot.keyboards.tasks import (
     get_task_actions_keyboard,
     get_tasks_list_keyboard,
     get_confirm_keyboard,
+    get_what_next_keyboard,
     TaskCallback,
     TaskAction,
     PriorityCallback,
@@ -31,12 +33,101 @@ from bot.database import queries
 router = Router()
 
 
+# ============== ДОПОМІЖНІ ФУНКЦІЇ ==============
+
 def get_priority_text(priority: int, lang: str) -> str:
     priority_keys = ["priority_urgent", "priority_high", "priority_medium", "priority_low"]
     return t(priority_keys[priority], lang)
 
 
+def parse_date(text: str) -> date | None:
+    """Парсинг дати з тексту (підтримує різні формати)."""
+    text = text.strip()
+
+    # Формати: 28.01.2026, 28/01/2026, 28-01-2026, 2026-01-28
+    patterns = [
+        (r'^(\d{1,2})\.(\d{1,2})\.(\d{4})$', '%d.%m.%Y'),
+        (r'^(\d{1,2})/(\d{1,2})/(\d{4})$', '%d/%m/%Y'),
+        (r'^(\d{1,2})-(\d{1,2})-(\d{4})$', '%d-%m-%Y'),
+        (r'^(\d{4})-(\d{1,2})-(\d{1,2})$', '%Y-%m-%d'),
+        (r'^(\d{1,2})\.(\d{1,2})$', '%d.%m'),  # Без року — поточний рік
+    ]
+
+    for pattern, fmt in patterns:
+        if re.match(pattern, text):
+            try:
+                if fmt == '%d.%m':
+                    # Додаємо поточний рік
+                    parsed = datetime.strptime(text, fmt)
+                    return parsed.replace(year=date.today().year).date()
+                return datetime.strptime(text, fmt).date()
+            except ValueError:
+                continue
+
+    return None
+
+
+def parse_time(text: str) -> tuple[int, int] | None:
+    """Парсинг часу з тексту (HH:MM або HH.MM)."""
+    text = text.strip()
+
+    # Формати: 12:30, 12.30, 12 30, 1230
+    patterns = [
+        r'^(\d{1,2}):(\d{2})$',
+        r'^(\d{1,2})\.(\d{2})$',
+        r'^(\d{1,2})\s(\d{2})$',
+        r'^(\d{2})(\d{2})$',
+    ]
+
+    for pattern in patterns:
+        match = re.match(pattern, text)
+        if match:
+            hour, minute = int(match.group(1)), int(match.group(2))
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                return (hour, minute)
+
+    # Просто година: "14" -> 14:00
+    if re.match(r'^\d{1,2}$', text):
+        hour = int(text)
+        if 0 <= hour <= 23:
+            return (hour, 0)
+
+    return None
+
+
+def parse_duration(text: str) -> int | None:
+    """Парсинг тривалості з тексту (хвилини або години)."""
+    text = text.strip().lower()
+
+    # Формати: "45", "45хв", "45m", "1.5год", "1.5h", "1год 30хв"
+
+    # Просто число — хвилини
+    if re.match(r'^\d+$', text):
+        return int(text)
+
+    # Хвилини: 45хв, 45m, 45 хв
+    match = re.match(r'^(\d+)\s*(хв|m|min|мин)$', text)
+    if match:
+        return int(match.group(1))
+
+    # Години: 2год, 2h, 1.5год
+    match = re.match(r'^(\d+(?:\.\d+)?)\s*(год|h|hour|час)$', text)
+    if match:
+        hours = float(match.group(1))
+        return int(hours * 60)
+
+    # Комбінація: 1год 30хв
+    match = re.match(r'^(\d+)\s*(год|h)\s*(\d+)\s*(хв|m)?$', text)
+    if match:
+        hours = int(match.group(1))
+        minutes = int(match.group(3))
+        return hours * 60 + minutes
+
+    return None
+
+
 def format_task(task: dict, lang: str) -> str:
+    """Форматування задачі для відображення."""
     priority_emoji = ["🔴", "🟠", "🟡", "🟢"][task["priority"]]
     status_emoji = "✅" if task["is_completed"] else "⬜"
 
@@ -53,22 +144,23 @@ def format_task(task: dict, lang: str) -> str:
 
     if task.get("scheduled_start"):
         start = datetime.fromisoformat(task["scheduled_start"])
-        text += f"\n⏰ Час: {start.strftime('%H:%M')}"
+        text += f"\n⏰ {t('task_view_time', lang)}: {start.strftime('%H:%M')}"
 
     if task.get("estimated_duration"):
         hours = task["estimated_duration"] // 60
         mins = task["estimated_duration"] % 60
         if hours and mins:
-            text += f"\n⏱ Тривалість: {hours}год {mins}хв"
+            text += f"\n⏱ {t('task_view_duration', lang)}: {hours}{t('hour_short', lang)} {mins}{t('min_short', lang)}"
         elif hours:
-            text += f"\n⏱ Тривалість: {hours}год"
+            text += f"\n⏱ {t('task_view_duration', lang)}: {hours}{t('hour_short', lang)}"
         else:
-            text += f"\n⏱ Тривалість: {mins}хв"
+            text += f"\n⏱ {t('task_view_duration', lang)}: {mins}{t('min_short', lang)}"
 
     return text
 
 
 def format_tasks_list(tasks: list, title: str, lang: str) -> str:
+    """Форматування списку задач."""
     if not tasks:
         return f"{title}\n\n{t('tasks_empty', lang)}"
 
@@ -96,6 +188,20 @@ def format_tasks_list(tasks: list, title: str, lang: str) -> str:
 
     return text
 
+
+def format_duration(minutes: int, lang: str) -> str:
+    """Форматування тривалості."""
+    hours = minutes // 60
+    mins = minutes % 60
+    if hours and mins:
+        return f"{hours}{t('hour_short', lang)} {mins}{t('min_short', lang)}"
+    elif hours:
+        return f"{hours}{t('hour_short', lang)}"
+    else:
+        return f"{mins}{t('min_short', lang)}"
+
+
+# ============== КОМАНДИ ==============
 
 @router.message(Command("tasks"))
 async def cmd_tasks(message: Message) -> None:
@@ -135,6 +241,8 @@ async def cmd_inbox(message: Message) -> None:
     await message.answer(text, reply_markup=get_tasks_list_keyboard(tasks, lang))
 
 
+# ============== СТВОРЕННЯ ЗАДАЧІ (FSM) ==============
+
 @router.message(Command("task_add"))
 async def start_task_creation_cmd(message: Message, state: FSMContext) -> None:
     user_id = message.from_user.id
@@ -154,6 +262,20 @@ async def start_task_creation_cb(callback: CallbackQuery, state: FSMContext) -> 
     await callback.answer()
 
 
+@router.callback_query(F.data == "tasks:view")
+async def callback_view_tasks(callback: CallbackQuery) -> None:
+    """Перегляд списку задач через callback."""
+    user_id = callback.from_user.id
+    lang = get_user_lang(user_id)
+    tasks = await queries.get_tasks_today(user_id)
+    today = date.today().strftime("%d.%m.%Y")
+    title = t("tasks_today_title", lang, date=today)
+    text = format_tasks_list(tasks, title, lang)
+    await callback.message.answer(text, reply_markup=get_tasks_list_keyboard(tasks, lang))
+    await callback.answer()
+
+
+# --- Крок 1: Назва ---
 @router.message(TaskCreation.title)
 async def process_title(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
@@ -169,6 +291,7 @@ async def process_title(message: Message, state: FSMContext) -> None:
     await message.answer(t("task_add_description", lang), reply_markup=get_skip_cancel_keyboard(lang))
 
 
+# --- Крок 2: Опис ---
 @router.message(TaskCreation.description)
 async def process_description(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
@@ -184,9 +307,16 @@ async def process_description(message: Message, state: FSMContext) -> None:
 
     await state.update_data(description=description)
     await state.set_state(TaskCreation.priority)
-    await message.answer(t("task_add_priority", lang), reply_markup=get_priority_keyboard(lang))
+
+    # Прибираємо Reply клавіатуру — далі тільки inline
+    await message.answer(
+        t("task_add_priority", lang),
+        reply_markup=ReplyKeyboardRemove()
+    )
+    await message.answer("⬇️", reply_markup=get_priority_keyboard(lang))
 
 
+# --- Крок 3: Пріоритет ---
 @router.callback_query(TaskCreation.priority, PriorityCallback.filter())
 async def process_priority(callback: CallbackQuery, callback_data: PriorityCallback, state: FSMContext) -> None:
     data = await state.get_data()
@@ -197,10 +327,18 @@ async def process_priority(callback: CallbackQuery, callback_data: PriorityCallb
     await callback.answer()
 
 
+# --- Крок 4: Дедлайн ---
 @router.callback_query(TaskCreation.deadline, DeadlineCallback.filter())
 async def process_deadline(callback: CallbackQuery, callback_data: DeadlineCallback, state: FSMContext) -> None:
     data = await state.get_data()
     lang = data.get("lang", "en")
+
+    if callback_data.option == "custom":
+        # Перехід до ручного вводу дати
+        await state.set_state(TaskCreation.deadline_custom)
+        await callback.message.edit_text(t("task_add_deadline_custom", lang))
+        await callback.answer()
+        return
 
     deadline = None
     if callback_data.option == "today":
@@ -216,10 +354,35 @@ async def process_deadline(callback: CallbackQuery, callback_data: DeadlineCallb
     await callback.answer()
 
 
+# --- Крок 4.1: Кастомна дата ---
+@router.message(TaskCreation.deadline_custom)
+async def process_deadline_custom(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    lang = data.get("lang", "en")
+
+    parsed_date = parse_date(message.text)
+    if not parsed_date:
+        await message.answer(t("error_invalid_date", lang))
+        return
+
+    deadline = datetime.combine(parsed_date, datetime.max.time())
+    await state.update_data(deadline=deadline.isoformat())
+    await state.set_state(TaskCreation.time)
+    await message.answer(t("task_add_time", lang), reply_markup=get_time_keyboard(lang))
+
+
+# --- Крок 5: Час ---
 @router.callback_query(TaskCreation.time, TimeCallback.filter())
 async def process_time(callback: CallbackQuery, callback_data: TimeCallback, state: FSMContext) -> None:
     data = await state.get_data()
     lang = data.get("lang", "en")
+
+    if callback_data.custom:
+        # Перехід до ручного вводу часу
+        await state.set_state(TaskCreation.time_custom)
+        await callback.message.edit_text(t("task_add_time_custom", lang))
+        await callback.answer()
+        return
 
     scheduled_start = None
     if callback_data.hour is not None:
@@ -234,13 +397,65 @@ async def process_time(callback: CallbackQuery, callback_data: TimeCallback, sta
     await callback.answer()
 
 
+# --- Крок 5.1: Кастомний час ---
+@router.message(TaskCreation.time_custom)
+async def process_time_custom(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    lang = data.get("lang", "en")
+
+    parsed_time = parse_time(message.text)
+    if not parsed_time:
+        await message.answer(t("error_invalid_time", lang))
+        return
+
+    hour, minute = parsed_time
+    base_date = date.today()
+    if data.get("deadline"):
+        base_date = datetime.fromisoformat(data["deadline"]).date()
+
+    scheduled_start = datetime.combine(base_date, datetime.min.time().replace(hour=hour, minute=minute))
+    await state.update_data(scheduled_start=scheduled_start.isoformat())
+    await state.set_state(TaskCreation.duration)
+    await message.answer(t("task_add_duration", lang), reply_markup=get_duration_keyboard(lang))
+
+
+# --- Крок 6: Тривалість ---
 @router.callback_query(TaskCreation.duration, DurationCallback.filter())
 async def process_duration(callback: CallbackQuery, callback_data: DurationCallback, state: FSMContext) -> None:
     data = await state.get_data()
     lang = data.get("lang", "en")
-    user_id = callback.from_user.id
 
-    duration = callback_data.minutes if callback_data.minutes else None
+    if callback_data.custom:
+        # Перехід до ручного вводу тривалості
+        await state.set_state(TaskCreation.duration_custom)
+        await callback.message.edit_text(t("task_add_duration_custom", lang))
+        await callback.answer()
+        return
+
+    duration = callback_data.minutes
+    await finish_task_creation(callback.message, state, duration, lang, is_callback=True)
+    await callback.answer()
+
+
+# --- Крок 6.1: Кастомна тривалість ---
+@router.message(TaskCreation.duration_custom)
+async def process_duration_custom(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    lang = data.get("lang", "en")
+
+    parsed_duration = parse_duration(message.text)
+    if not parsed_duration:
+        await message.answer(t("error_invalid_duration", lang))
+        return
+
+    await finish_task_creation(message, state, parsed_duration, lang, is_callback=False)
+
+
+# --- Фінальне створення задачі ---
+async def finish_task_creation(message: Message, state: FSMContext, duration: int | None, lang: str, is_callback: bool = False) -> None:
+    """Завершення створення задачі."""
+    data = await state.get_data()
+    user_id = message.chat.id
 
     task_id = await queries.create_task(
         user_id=user_id,
@@ -254,7 +469,9 @@ async def process_duration(callback: CallbackQuery, callback_data: DurationCallb
 
     await state.clear()
 
+    # Формуємо підтвердження
     priority_text = get_priority_text(data["priority"], lang)
+
     deadline_line = ""
     if data.get("deadline"):
         deadline_dt = datetime.fromisoformat(data["deadline"])
@@ -265,22 +482,34 @@ async def process_duration(callback: CallbackQuery, callback_data: DurationCallb
         start_dt = datetime.fromisoformat(data["scheduled_start"])
         time_line = t("task_created_time", lang, time=start_dt.strftime('%H:%M'))
 
-    text = t("task_created", lang, title=data["title"], priority=priority_text, deadline=deadline_line, time=time_line, task_id=task_id)
-
+    duration_line = ""
     if duration:
-        hours = duration // 60
-        mins = duration % 60
-        if hours and mins:
-            text += f"\n⏱ Тривалість: {hours}год {mins}хв"
-        elif hours:
-            text += f"\n⏱ Тривалість: {hours}год"
-        else:
-            text += f"\n⏱ Тривалість: {mins}хв"
+        duration_line = t("task_created_duration", lang, duration=format_duration(duration, lang))
 
-    await callback.message.edit_text(text)
-    await callback.message.answer(t("what_next", lang), reply_markup=get_main_reply_keyboard(lang))
-    await callback.answer()
+    text = t("task_created_full", lang,
+             title=data["title"],
+             priority=priority_text,
+             deadline=deadline_line,
+             time=time_line,
+             duration=duration_line,
+             task_id=task_id)
 
+    if is_callback:
+        await message.edit_text(text)
+    else:
+        await message.answer(text)
+
+    # Кнопки "Що далі?"
+    await message.answer(
+        t("what_next", lang),
+        reply_markup=get_what_next_keyboard(lang)
+    )
+
+    # Повертаємо основну Reply клавіатуру
+    await message.answer("👇", reply_markup=get_main_reply_keyboard(lang))
+
+
+# ============== ДІЇ З ЗАДАЧАМИ ==============
 
 @router.callback_query(TaskCallback.filter(F.action == TaskAction.view))
 async def view_task(callback: CallbackQuery, callback_data: TaskCallback) -> None:
@@ -359,6 +588,8 @@ async def back_to_tasks(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+# ============== ШВИДКІ КОМАНДИ ==============
+
 @router.message(Command("task_done"))
 async def cmd_task_done(message: Message) -> None:
     user_id = message.from_user.id
@@ -405,6 +636,8 @@ async def cmd_task_delete(message: Message) -> None:
     else:
         await message.answer(t("task_not_found", lang))
 
+
+# ============== СКАСУВАННЯ FSM ==============
 
 @router.message(F.text.in_(["❌ Скасувати", "❌ Cancel"]))
 async def cancel_fsm(message: Message, state: FSMContext) -> None:
