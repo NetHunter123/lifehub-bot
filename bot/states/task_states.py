@@ -1,6 +1,5 @@
 """
 FSM стани для роботи з задачами.
-Використовуються для багатокрокових діалогів.
 """
 
 from aiogram.fsm.state import State, StatesGroup
@@ -8,25 +7,21 @@ from aiogram.fsm.state import State, StatesGroup
 
 class TaskCreation(StatesGroup):
     """Стани для створення нової задачі."""
-    
-    # Крок 1: Введення назви
-    title = State()
-    
-    # Крок 2: Опис (опціонально)
-    description = State()
-    
-    # Крок 3: Пріоритет
-    priority = State()
-    
-    # Крок 4: Дедлайн
-    deadline = State()
-    
-    # Крок 5: Прив'язка до цілі (опціонально)
-    goal = State()
+
+    title = State()              # Крок 1: Назва
+    description = State()        # Крок 2: Опис (можна пропустити)
+    priority = State()           # Крок 3: Пріоритет (inline)
+    deadline = State()           # Крок 4: Дедлайн (inline)
+    deadline_custom = State()    # Крок 4.1: Кастомна дата (текст)
+    time = State()               # Крок 5: Час початку (inline)
+    time_custom = State()        # Крок 5.1: Кастомний час (текст)
+    duration = State()           # Крок 6: Тривалість (inline)
+    duration_custom = State()    # Крок 6.1: Кастомна тривалість (текст)
+    goal = State()               # Крок 7: Прив'язка до цілі (майбутнє)
 
 
 class TaskEdit(StatesGroup):
     """Стани для редагування задачі."""
-    
-    waiting_for_field = State()  # Вибір поля для редагування
-    waiting_for_value = State()  # Введення нового значення
+
+    waiting_for_field = State()
+    waiting_for_value = State()
