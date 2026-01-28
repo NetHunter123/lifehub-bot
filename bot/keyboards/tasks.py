@@ -16,6 +16,7 @@ class TaskAction(str, Enum):
     complete = "c"
     delete = "d"
     edit = "e"
+    undo = "u"
 
 
 class TaskCallback(CallbackData, prefix="task"):
@@ -85,10 +86,8 @@ def get_time_keyboard(lang: str = 'en') -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     times = [
         ("🌅 08:00", 8), ("🌅 09:00", 9),
-        ("☀️ 10:00", 10), ("☀️ 11:00", 11),
-        ("☀️ 12:00", 12), ("☀️ 13:00", 13),
-        ("🌤 14:00", 14), ("🌤 15:00", 15),
-        ("🌤 16:00", 16), ("🌤 17:00", 17),
+        ("☀️ 10:00", 10), ("☀️ 12:00", 12),
+        ("🌤 14:00", 14), ("🌤 16:00", 16),
         ("🌆 18:00", 18), ("🌙 20:00", 20),
     ]
     for text, hour in times:
@@ -142,41 +141,63 @@ def get_duration_keyboard(lang: str = 'en') -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_task_actions_keyboard(task_id: int, lang: str = 'en') -> InlineKeyboardMarkup:
+def get_task_actions_keyboard(task_id: int, lang: str = 'en', is_completed: bool = False) -> InlineKeyboardMarkup:
     """Клавіатура дій з конкретною задачею."""
     builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(
-            text=t("btn_done", lang),
-            callback_data=TaskCallback(action=TaskAction.complete, task_id=task_id).pack()
-        ),
-        InlineKeyboardButton(
-            text=t("btn_edit", lang),
-            callback_data=TaskCallback(action=TaskAction.edit, task_id=task_id).pack()
+    
+    if is_completed:
+        # Для виконаних задач — тільки Undo (повернути в роботу) і Назад
+        builder.row(
+            InlineKeyboardButton(
+                text=t("btn_restore", lang),
+                callback_data=TaskCallback(action=TaskAction.undo, task_id=task_id).pack()
+            )
         )
-    )
-    builder.row(
-        InlineKeyboardButton(
-            text=t("btn_delete", lang),
-            callback_data=TaskCallback(action=TaskAction.delete, task_id=task_id).pack()
-        ),
-        InlineKeyboardButton(
-            text=t("btn_back", lang),
-            callback_data="tasks:back"
+        builder.row(
+            InlineKeyboardButton(
+                text=t("btn_delete", lang),
+                callback_data=TaskCallback(action=TaskAction.delete, task_id=task_id).pack()
+            ),
+            InlineKeyboardButton(
+                text=t("btn_back", lang),
+                callback_data="tasks:back"
+            )
         )
-    )
+    else:
+        # Для активних задач — повний набір
+        builder.row(
+            InlineKeyboardButton(
+                text=t("btn_done", lang),
+                callback_data=TaskCallback(action=TaskAction.complete, task_id=task_id).pack()
+            ),
+            InlineKeyboardButton(
+                text=t("btn_edit", lang),
+                callback_data=TaskCallback(action=TaskAction.edit, task_id=task_id).pack()
+            )
+        )
+        builder.row(
+            InlineKeyboardButton(
+                text=t("btn_delete", lang),
+                callback_data=TaskCallback(action=TaskAction.delete, task_id=task_id).pack()
+            ),
+            InlineKeyboardButton(
+                text=t("btn_back", lang),
+                callback_data="tasks:back"
+            )
+        )
+    
     return builder.as_markup()
 
 
-def get_tasks_list_keyboard(tasks: list, lang: str = 'en', page: int = 0, per_page: int = 5) -> InlineKeyboardMarkup:
-    """Клавіатура зі списком задач + пагінація."""
+def get_tasks_list_keyboard(tasks: list, lang: str = 'en', page: int = 0, per_page: int = 5, filter_type: str = "today") -> InlineKeyboardMarkup:
+    """Клавіатура зі списком задач + пагінація + фільтри."""
     builder = InlineKeyboardBuilder()
-
+    
     if tasks:
         start = page * per_page
         end = start + per_page
         page_tasks = tasks[start:end]
-
+        
         for task in page_tasks:
             priority_emoji = ["🔴", "🟠", "🟡", "🟢"][task["priority"]]
             status_emoji = "✅" if task["is_completed"] else "⬜"
@@ -184,7 +205,7 @@ def get_tasks_list_keyboard(tasks: list, lang: str = 'en', page: int = 0, per_pa
                 text=f"{status_emoji} {priority_emoji} {task['title'][:30]}",
                 callback_data=TaskCallback(action=TaskAction.view, task_id=task["id"]).pack()
             ))
-
+        
         total_pages = (len(tasks) + per_page - 1) // per_page
         if total_pages > 1:
             nav_buttons = []
@@ -194,10 +215,23 @@ def get_tasks_list_keyboard(tasks: list, lang: str = 'en', page: int = 0, per_pa
             if page < total_pages - 1:
                 nav_buttons.append(InlineKeyboardButton(text="▶️", callback_data=f"page:{page+1}"))
             builder.row(*nav_buttons)
-
-    # ЗАВЖДИ показуємо кнопку додавання
-    builder.row(InlineKeyboardButton(text=t("btn_add_task", lang), callback_data="task:add"))
-
+    
+    # Фільтри
+    filters = []
+    if filter_type != "today":
+        filters.append(InlineKeyboardButton(text=t("filter_today", lang), callback_data="filter:today"))
+    if filter_type != "all":
+        filters.append(InlineKeyboardButton(text=t("filter_all", lang), callback_data="filter:all"))
+    if filter_type != "history":
+        filters.append(InlineKeyboardButton(text=t("filter_history", lang), callback_data="filter:history"))
+    
+    if filters:
+        builder.row(*filters)
+    
+    # Кнопка додавання (не показуємо в історії)
+    if filter_type != "history":
+        builder.row(InlineKeyboardButton(text=t("btn_add_task", lang), callback_data="task:add"))
+    
     return builder.as_markup()
 
 
@@ -218,4 +252,48 @@ def get_what_next_keyboard(lang: str = 'en') -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=t("btn_add_another", lang), callback_data="task:add"),
         InlineKeyboardButton(text=t("btn_view_tasks", lang), callback_data="tasks:view")
     )
+    return builder.as_markup()
+
+
+class EditField(str, Enum):
+    """Поля для редагування."""
+    title = "title"
+    description = "description"
+    priority = "priority"
+    deadline = "deadline"
+    time = "time"
+    duration = "duration"
+
+
+class EditCallback(CallbackData, prefix="edit"):
+    """Callback для редагування."""
+    field: EditField
+    task_id: int
+
+
+def get_edit_field_keyboard(task_id: int, lang: str = 'en') -> InlineKeyboardMarkup:
+    """Клавіатура вибору поля для редагування."""
+    builder = InlineKeyboardBuilder()
+    
+    fields = [
+        (t("edit_field_title", lang), EditField.title),
+        (t("edit_field_description", lang), EditField.description),
+        (t("edit_field_priority", lang), EditField.priority),
+        (t("edit_field_deadline", lang), EditField.deadline),
+        (t("edit_field_time", lang), EditField.time),
+        (t("edit_field_duration", lang), EditField.duration),
+    ]
+    
+    for text, field in fields:
+        builder.add(InlineKeyboardButton(
+            text=text,
+            callback_data=EditCallback(field=field, task_id=task_id).pack()
+        ))
+    
+    builder.adjust(2)
+    builder.row(InlineKeyboardButton(
+        text=t("btn_back", lang),
+        callback_data=TaskCallback(action=TaskAction.view, task_id=task_id).pack()
+    ))
+    
     return builder.as_markup()

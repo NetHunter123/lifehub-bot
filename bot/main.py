@@ -11,7 +11,7 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 
 from bot.config import config
-from bot.handlers import common, tasks
+from bot.handlers import common, tasks, goals
 from bot.database.models import init_database
 from bot.database import queries
 from bot.locales import set_user_lang
@@ -57,6 +57,7 @@ async def main() -> None:
     # Реєструємо роутери
     dp.include_router(common.router)
     dp.include_router(tasks.router)
+    dp.include_router(goals.router)
     
     # Запускаємо
     logger.info("🚀 Запускаємо бота...")
