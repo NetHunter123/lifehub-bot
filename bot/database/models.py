@@ -1,6 +1,6 @@
 """
 Моделі бази даних.
-Ініціалізація SQLite та створення таблиць.
+Версія 3.0 — 5 структурних типів цілей.
 """
 
 import aiosqlite
@@ -18,15 +18,130 @@ async def init_database() -> None:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS user_settings (
                 user_id INTEGER PRIMARY KEY,
-                language TEXT DEFAULT 'en',
-                group_chat_id INTEGER,
-                topic_main_id INTEGER,
-                topic_tasks_id INTEGER,
-                topic_books_id INTEGER,
-                topic_words_id INTEGER,
+                language TEXT DEFAULT 'uk',
                 morning_time TIME DEFAULT '08:00',
                 evening_time TIME DEFAULT '21:00',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # ============== ЦІЛІ (5 структурних типів) ==============
+        # goal_type: task, project, habit, target, metric
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS goals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT,
+                
+                -- Структурний тип (визначає логіку трекінгу)
+                goal_type TEXT NOT NULL CHECK(goal_type IN ('task', 'project', 'habit', 'target', 'metric')),
+                
+                -- Ієрархія
+                parent_id INTEGER,
+                
+                -- Теги доменів (JSON array: ["health", "learning"])
+                domain_tags TEXT DEFAULT '[]',
+                
+                -- Для Habit
+                frequency TEXT,                    -- daily, weekly, 3_per_week
+                schedule_days TEXT,                -- "1,2,3,4,5" (Пн-Пт)
+                reminder_time TIME,
+                duration_minutes INTEGER,          -- Тривалість в хвилинах
+                current_streak INTEGER DEFAULT 0,
+                longest_streak INTEGER DEFAULT 0,
+                
+                -- Для Target
+                target_value REAL,
+                current_value REAL DEFAULT 0,
+                unit TEXT,                         -- "книг", "км", "€"
+                
+                -- Для Metric
+                target_min REAL,
+                target_max REAL,
+                
+                -- Загальне
+                deadline DATE,
+                progress INTEGER DEFAULT 0,        -- 0-100, auto для project/target
+                status TEXT DEFAULT 'active' CHECK(status IN ('active', 'completed', 'archived')),
+                
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                completed_at DATETIME,
+                
+                FOREIGN KEY (parent_id) REFERENCES goals(id) ON DELETE SET NULL
+            )
+        """)
+        
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS ix_goals_user_id ON goals(user_id)
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS ix_goals_parent_id ON goals(parent_id)
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS ix_goals_type ON goals(goal_type)
+        """)
+        
+        # ============== ЛОГИ ЗВИЧОК (для Habit) ==============
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS habit_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                goal_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                date DATE NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('done', 'skipped', 'missed')),
+                notes TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (goal_id) REFERENCES goals(id) ON DELETE CASCADE,
+                UNIQUE(goal_id, date)
+            )
+        """)
+        
+        # ============== ЗАПИСИ ЦІЛЕЙ (для Target/Metric) ==============
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS goal_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                goal_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                date DATE NOT NULL,
+                value REAL NOT NULL,
+                notes TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (goal_id) REFERENCES goals(id) ON DELETE CASCADE
+            )
+        """)
+        
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS ix_goal_entries_goal_id ON goal_entries(goal_id)
+        """)
+        
+        # ============== TIME BLOCKS (школа, робота) ==============
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS time_blocks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                start_time TIME NOT NULL,
+                end_time TIME NOT NULL,
+                days TEXT NOT NULL,                -- "1,2,3,4" (Пн-Чт)
+                is_fixed INTEGER DEFAULT 1,        -- Фіксований час (не зсувається)
+                is_skippable INTEGER DEFAULT 1,    -- Чи можна пропустити
+                is_active INTEGER DEFAULT 1,
+                color TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Таблиця для щоденних пропусків time_blocks
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS time_block_skips (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                time_block_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                skip_date DATE NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (time_block_id) REFERENCES time_blocks(id) ON DELETE CASCADE,
+                UNIQUE(time_block_id, skip_date)
             )
         """)
         
@@ -37,19 +152,16 @@ async def init_database() -> None:
                 user_id INTEGER NOT NULL,
                 title TEXT NOT NULL,
                 description TEXT,
-                priority INTEGER DEFAULT 2,
+                priority INTEGER DEFAULT 2,        -- 0=urgent, 1=high, 2=medium, 3=low
                 deadline DATETIME,
                 scheduled_start DATETIME,
-                estimated_duration INTEGER,
-                travel_time_before INTEGER DEFAULT 0,
-                location TEXT,
+                scheduled_end DATETIME,
+                estimated_duration INTEGER,        -- хвилини
                 reminder_time DATETIME,
-                goal_id INTEGER,
-                is_recurring INTEGER DEFAULT 0,
-                recurrence_pattern TEXT,
+                goal_id INTEGER,                   -- Прив'язка до Project
+                is_fixed INTEGER DEFAULT 0,        -- 1=фіксований час, 0=гнучкий
                 is_completed INTEGER DEFAULT 0,
                 completed_at DATETIME,
-                status_notes TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (goal_id) REFERENCES goals(id) ON DELETE SET NULL
             )
@@ -58,126 +170,8 @@ async def init_database() -> None:
         await db.execute("""
             CREATE INDEX IF NOT EXISTS ix_tasks_user_id ON tasks(user_id)
         """)
-        
-        # ============== ЦІЛІ ==============
         await db.execute("""
-            CREATE TABLE IF NOT EXISTS goals (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                title TEXT NOT NULL,
-                description TEXT,
-                goal_type TEXT NOT NULL,
-                parent_id INTEGER,
-                progress INTEGER DEFAULT 0,
-                progress_mode TEXT DEFAULT 'auto',
-                target_value REAL,
-                current_value REAL DEFAULT 0,
-                schedule_days TEXT,
-                schedule_time TIME,
-                duration_minutes INTEGER,
-                status TEXT DEFAULT 'active',
-                deadline DATE,
-                current_streak INTEGER DEFAULT 0,
-                longest_streak INTEGER DEFAULT 0,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                completed_at DATETIME,
-                FOREIGN KEY (parent_id) REFERENCES goals(id) ON DELETE SET NULL
-            )
-        """)
-        
-        await db.execute("""
-            CREATE INDEX IF NOT EXISTS ix_goals_user_id ON goals(user_id)
-        """)
-        
-        # ============== ЕТАПИ ЦІЛЕЙ ==============
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS goal_milestones (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                goal_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                title TEXT NOT NULL,
-                order_num INTEGER NOT NULL,
-                progress_current INTEGER DEFAULT 0,
-                progress_target INTEGER DEFAULT 4,
-                status TEXT DEFAULT 'pending',
-                attempts_count INTEGER DEFAULT 0,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                completed_at DATETIME,
-                FOREIGN KEY (goal_id) REFERENCES goals(id) ON DELETE CASCADE
-            )
-        """)
-        
-        # ============== ЛОГИ ЕТАПІВ ==============
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS milestone_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                milestone_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                date DATE NOT NULL,
-                progress_before INTEGER,
-                progress_after INTEGER,
-                status TEXT NOT NULL,
-                skip_reason TEXT,
-                duration_minutes INTEGER,
-                notes TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (milestone_id) REFERENCES goal_milestones(id) ON DELETE CASCADE
-            )
-        """)
-        
-        # ============== МЕТРИКИ ==============
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS goal_metrics (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                goal_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                name TEXT NOT NULL,
-                unit TEXT,
-                target_value REAL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (goal_id) REFERENCES goals(id) ON DELETE CASCADE
-            )
-        """)
-        
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS metric_entries (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                metric_id INTEGER NOT NULL,
-                value REAL NOT NULL,
-                date DATE NOT NULL,
-                notes TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (metric_id) REFERENCES goal_metrics(id) ON DELETE CASCADE
-            )
-        """)
-        
-        # ============== ЗВИЧКИ ==============
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS habits (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                title TEXT NOT NULL,
-                frequency TEXT NOT NULL,
-                custom_days TEXT,
-                reminder_time TIME,
-                current_streak INTEGER DEFAULT 0,
-                longest_streak INTEGER DEFAULT 0,
-                is_active INTEGER DEFAULT 1,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS habit_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                habit_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                date DATE NOT NULL,
-                status TEXT NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (habit_id) REFERENCES habits(id) ON DELETE CASCADE,
-                UNIQUE(habit_id, date)
-            )
+            CREATE INDEX IF NOT EXISTS ix_tasks_goal_id ON tasks(goal_id)
         """)
         
         # ============== КНИГИ ==============
@@ -209,29 +203,14 @@ async def init_database() -> None:
                 translation TEXT NOT NULL,
                 language TEXT DEFAULT 'de',
                 part_of_speech TEXT,
-                gender TEXT,
-                plural TEXT,
                 example TEXT,
                 tags TEXT,
-                cefr_level TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS word_progress (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                word_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
                 ease_factor REAL DEFAULT 2.5,
                 interval INTEGER DEFAULT 0,
                 repetitions INTEGER DEFAULT 0,
                 due_date DATE,
                 last_review DATETIME,
-                lapses INTEGER DEFAULT 0,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (word_id) REFERENCES words(id) ON DELETE CASCADE,
-                UNIQUE(word_id)
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
         
@@ -251,10 +230,7 @@ async def init_database() -> None:
             (2, 'Маленький крок сьогодні — великий результат завтра', 'consistency'),
             (3, '5 хвилин краще ніж 0 хвилин', 'discipline'),
             (4, 'Дисципліна — це міст між цілями та досягненнями', 'discipline'),
-            (5, 'Успіх — це сума маленьких зусиль, що повторюються день за днем', 'consistency'),
-            (6, 'Не зупиняйся, коли втомився. Зупиняйся, коли закінчив', 'discipline'),
-            (7, 'Кожен експерт колись був початківцем', 'learning'),
-            (8, 'Найкращий час посадити дерево був 20 років тому. Другий найкращий час — зараз', 'consistency')
+            (5, 'Успіх — це сума маленьких зусиль, що повторюються день за днем', 'consistency')
         """)
         
         await db.commit()

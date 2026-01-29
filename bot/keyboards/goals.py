@@ -1,121 +1,142 @@
 """
-Клавіатури для роботи з цілями.
+Клавіатури для роботи з цілями v3.
+5 структурних типів: task, project, habit, target, metric.
 """
 
 from enum import Enum
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.filters.callback_data import CallbackData
-
 from bot.locales import t
 
 
-# ============== ТИПИ ЦІЛЕЙ ==============
+# ============== ТИПИ ==============
 
 class GoalType(str, Enum):
-    """Типи цілей за періодом."""
-    yearly = "yearly"
-    quarterly = "quarterly"
-    monthly = "monthly"
-    weekly = "weekly"
+    """Структурні типи цілей."""
+    task = "task"
+    project = "project"
+    habit = "habit"
+    target = "target"
+    metric = "metric"
 
 
 GOAL_TYPE_EMOJI = {
-    GoalType.yearly: "🎯",
-    GoalType.quarterly: "📊",
-    GoalType.monthly: "📅",
-    GoalType.weekly: "📋",
+    GoalType.task: "📝",
+    GoalType.project: "📋",
+    GoalType.habit: "✅",
+    GoalType.target: "🎯",
+    GoalType.metric: "📊",
 }
 
 
-# ============== CALLBACK DATA ==============
-
 class GoalAction(str, Enum):
-    """Дії з цілями."""
     view = "v"
     edit = "e"
     delete = "d"
     progress = "p"
     complete = "c"
     restore = "r"
+    log = "l"       # Для habit
+    entry = "n"     # Для target/metric
 
 
-class GoalCallback(CallbackData, prefix="goal"):
-    """Callback для дій з ціллю."""
+# ============== CALLBACK DATA ==============
+
+class GoalCallback(CallbackData, prefix="g"):
     action: GoalAction
     goal_id: int
 
 
-class GoalTypeCallback(CallbackData, prefix="gtype"):
-    """Callback для вибору типу цілі."""
+class GoalTypeCallback(CallbackData, prefix="gt"):
     goal_type: GoalType
 
 
-class GoalParentCallback(CallbackData, prefix="gparent"):
-    """Callback для вибору батьківської цілі."""
-    parent_id: int  # 0 = без батьківської
+class GoalParentCallback(CallbackData, prefix="gp"):
+    parent_id: int
+
+
+class FrequencyCallback(CallbackData, prefix="gf"):
+    frequency: str
 
 
 class GoalEditField(str, Enum):
-    """Поля для редагування цілі."""
     title = "title"
     description = "description"
     deadline = "deadline"
-    goal_type = "goal_type"
+    target_value = "target_value"
 
 
-class GoalEditCallback(CallbackData, prefix="gedit"):
-    """Callback для редагування поля цілі."""
+class GoalEditCallback(CallbackData, prefix="ge"):
     field: GoalEditField
     goal_id: int
 
 
 # ============== КЛАВІАТУРИ ==============
 
-def get_goal_type_keyboard(lang: str = 'en') -> InlineKeyboardMarkup:
-    """Клавіатура вибору типу цілі."""
+def get_goal_type_keyboard(lang: str = 'uk') -> InlineKeyboardMarkup:
+    """Вибір типу цілі."""
     builder = InlineKeyboardBuilder()
     
     types = [
-        (f"🎯 {t('goal_type_yearly', lang)}", GoalType.yearly),
-        (f"📊 {t('goal_type_quarterly', lang)}", GoalType.quarterly),
-        (f"📅 {t('goal_type_monthly', lang)}", GoalType.monthly),
-        (f"📋 {t('goal_type_weekly', lang)}", GoalType.weekly),
+        (f"📝 {t('goal_type_task', lang)}", GoalType.task),
+        (f"📋 {t('goal_type_project', lang)}", GoalType.project),
+        (f"✅ {t('goal_type_habit', lang)}", GoalType.habit),
+        (f"🎯 {t('goal_type_target', lang)}", GoalType.target),
+        (f"📊 {t('goal_type_metric', lang)}", GoalType.metric),
     ]
     
-    for text, goal_type in types:
+    for text, gtype in types:
         builder.add(InlineKeyboardButton(
             text=text,
-            callback_data=GoalTypeCallback(goal_type=goal_type).pack()
+            callback_data=GoalTypeCallback(goal_type=gtype).pack()
+        ))
+    
+    builder.adjust(2, 2, 1)
+    return builder.as_markup()
+
+
+def get_frequency_keyboard(lang: str = 'uk') -> InlineKeyboardMarkup:
+    """Вибір частоти для звички."""
+    builder = InlineKeyboardBuilder()
+    
+    options = [
+        (t('freq_daily', lang), "daily"),
+        (t('freq_weekdays', lang), "weekdays"),
+        (t('freq_3_per_week', lang), "3_per_week"),
+        (t('freq_custom', lang), "custom"),
+    ]
+    
+    for text, freq in options:
+        builder.add(InlineKeyboardButton(
+            text=text,
+            callback_data=FrequencyCallback(frequency=freq).pack()
         ))
     
     builder.adjust(2)
     return builder.as_markup()
 
 
-def get_goal_parent_keyboard(goals: list, lang: str = 'en') -> InlineKeyboardMarkup:
-    """Клавіатура вибору батьківської цілі."""
+def get_parent_keyboard(projects: list, lang: str = 'uk') -> InlineKeyboardMarkup:
+    """Вибір батьківського проєкту."""
     builder = InlineKeyboardBuilder()
     
-    # Кнопка "Без батьківської"
     builder.row(InlineKeyboardButton(
         text=t("goal_no_parent", lang),
         callback_data=GoalParentCallback(parent_id=0).pack()
     ))
     
-    # Список існуючих цілей
-    for goal in goals:
-        emoji = GOAL_TYPE_EMOJI.get(GoalType(goal["goal_type"]), "🎯")
+    for proj in projects[:10]:  # Максимум 10
         builder.row(InlineKeyboardButton(
-            text=f"{emoji} {goal['title'][:40]}",
-            callback_data=GoalParentCallback(parent_id=goal["id"]).pack()
+            text=f"📋 {proj['title'][:35]}",
+            callback_data=GoalParentCallback(parent_id=proj['id']).pack()
         ))
     
     return builder.as_markup()
 
 
-def get_goal_deadline_keyboard(lang: str = 'en') -> InlineKeyboardMarkup:
-    """Клавіатура вибору дедлайну для цілі."""
+def get_deadline_keyboard(lang: str = 'uk') -> InlineKeyboardMarkup:
+    """Вибір дедлайну."""
     builder = InlineKeyboardBuilder()
     
     options = [
@@ -127,94 +148,101 @@ def get_goal_deadline_keyboard(lang: str = 'en') -> InlineKeyboardMarkup:
         (t("deadline_none", lang), "none"),
     ]
     
-    for text, option in options:
-        builder.add(InlineKeyboardButton(
-            text=text,
-            callback_data=f"goal_deadline:{option}"
-        ))
+    for text, opt in options:
+        builder.add(InlineKeyboardButton(text=text, callback_data=f"goal_ddl:{opt}"))
     
     builder.adjust(2)
     return builder.as_markup()
 
 
-def get_goals_list_keyboard(goals: list, lang: str = 'en', filter_type: str = "active") -> InlineKeyboardMarkup:
-    """Клавіатура зі списком цілей."""
+def get_goals_list_keyboard(goals: list, lang: str = 'uk', filter_type: str = "active") -> InlineKeyboardMarkup:
+    """Список цілей з фільтрами."""
     builder = InlineKeyboardBuilder()
     
-    if goals:
-        for goal in goals:
-            emoji = GOAL_TYPE_EMOJI.get(GoalType(goal["goal_type"]), "🎯")
-            status = "✅" if goal.get("status") == "completed" else ""
-            progress = goal.get("progress", 0)
-            
-            # Показуємо прогрес для активних цілей
-            progress_bar = f" [{progress}%]" if goal.get("status") != "completed" else ""
-            
-            builder.row(InlineKeyboardButton(
-                text=f"{status}{emoji} {goal['title'][:30]}{progress_bar}",
-                callback_data=GoalCallback(action=GoalAction.view, goal_id=goal["id"]).pack()
-            ))
+    for goal in goals[:15]:  # Максимум 15
+        emoji = GOAL_TYPE_EMOJI.get(GoalType(goal['goal_type']), "🎯")
+        status = "✅" if goal.get('status') == 'completed' else ""
+        progress = f" [{goal.get('progress', 0)}%]" if goal.get('status') != 'completed' else ""
+        
+        # Для звичок показуємо streak
+        if goal['goal_type'] == 'habit':
+            streak = goal.get('current_streak', 0)
+            progress = f" 🔥{streak}" if streak > 0 else ""
+        
+        builder.row(InlineKeyboardButton(
+            text=f"{status}{emoji} {goal['title'][:30]}{progress}",
+            callback_data=GoalCallback(action=GoalAction.view, goal_id=goal['id']).pack()
+        ))
     
     # Фільтри
     filters = []
     if filter_type != "active":
-        filters.append(InlineKeyboardButton(
-            text=t("filter_active", lang),
-            callback_data="goals_filter:active"
-        ))
+        filters.append(InlineKeyboardButton(text=t("filter_active", lang), callback_data="goals_f:active"))
     if filter_type != "completed":
-        filters.append(InlineKeyboardButton(
-            text=t("filter_completed", lang),
-            callback_data="goals_filter:completed"
-        ))
+        filters.append(InlineKeyboardButton(text=t("filter_completed", lang), callback_data="goals_f:completed"))
     if filter_type != "all":
-        filters.append(InlineKeyboardButton(
-            text=t("filter_all", lang),
-            callback_data="goals_filter:all"
-        ))
+        filters.append(InlineKeyboardButton(text=t("filter_all", lang), callback_data="goals_f:all"))
     
     if filters:
         builder.row(*filters)
     
-    # Кнопка додавання
-    builder.row(InlineKeyboardButton(
-        text=t("btn_add_goal", lang),
-        callback_data="goal:add"
-    ))
+    builder.row(InlineKeyboardButton(text=t("btn_add_goal", lang), callback_data="goal:add"))
     
     return builder.as_markup()
 
 
-def get_goal_actions_keyboard(goal_id: int, lang: str = 'en', is_completed: bool = False) -> InlineKeyboardMarkup:
-    """Клавіатура дій з ціллю."""
+def get_goal_actions_keyboard(goal: dict, lang: str = 'uk') -> InlineKeyboardMarkup:
+    """Дії з ціллю залежно від типу."""
     builder = InlineKeyboardBuilder()
+    goal_id = goal['id']
+    goal_type = goal['goal_type']
+    is_completed = goal.get('status') == 'completed'
     
     if is_completed:
-        # Для завершених цілей
-        builder.row(
-            InlineKeyboardButton(
-                text=t("btn_restore", lang),
-                callback_data=GoalCallback(action=GoalAction.restore, goal_id=goal_id).pack()
-            )
-        )
+        builder.row(InlineKeyboardButton(
+            text=t("btn_restore", lang),
+            callback_data=GoalCallback(action=GoalAction.restore, goal_id=goal_id).pack()
+        ))
     else:
-        # Для активних цілей
-        builder.row(
-            InlineKeyboardButton(
-                text=t("btn_progress", lang),
-                callback_data=GoalCallback(action=GoalAction.progress, goal_id=goal_id).pack()
-            ),
-            InlineKeyboardButton(
+        # Дії залежно від типу
+        if goal_type == 'habit':
+            builder.row(
+                InlineKeyboardButton(
+                    text="✅ " + t("btn_done", lang),
+                    callback_data=GoalCallback(action=GoalAction.log, goal_id=goal_id).pack()
+                ),
+                InlineKeyboardButton(
+                    text="⏭ " + t("btn_skip", lang),
+                    callback_data=f"habit_skip:{goal_id}"
+                )
+            )
+        elif goal_type in ('target', 'metric'):
+            builder.row(InlineKeyboardButton(
+                text="➕ " + t("btn_add_entry", lang),
+                callback_data=GoalCallback(action=GoalAction.entry, goal_id=goal_id).pack()
+            ))
+        
+        if goal_type != 'task':
+            builder.row(
+                InlineKeyboardButton(
+                    text=t("btn_progress", lang),
+                    callback_data=GoalCallback(action=GoalAction.progress, goal_id=goal_id).pack()
+                ),
+                InlineKeyboardButton(
+                    text=t("btn_complete", lang),
+                    callback_data=GoalCallback(action=GoalAction.complete, goal_id=goal_id).pack()
+                )
+            )
+        else:
+            builder.row(InlineKeyboardButton(
                 text=t("btn_complete", lang),
                 callback_data=GoalCallback(action=GoalAction.complete, goal_id=goal_id).pack()
-            )
-        )
-        builder.row(
-            InlineKeyboardButton(
-                text=t("btn_edit", lang),
-                callback_data=GoalCallback(action=GoalAction.edit, goal_id=goal_id).pack()
-            )
-        )
+            ))
+        
+        builder.row(InlineKeyboardButton(
+            text=t("btn_edit", lang),
+            callback_data=GoalCallback(action=GoalAction.edit, goal_id=goal_id).pack()
+        ))
     
     builder.row(
         InlineKeyboardButton(
@@ -230,16 +258,18 @@ def get_goal_actions_keyboard(goal_id: int, lang: str = 'en', is_completed: bool
     return builder.as_markup()
 
 
-def get_goal_edit_keyboard(goal_id: int, lang: str = 'en') -> InlineKeyboardMarkup:
-    """Клавіатура вибору поля для редагування цілі."""
+def get_goal_edit_keyboard(goal_id: int, goal_type: str, lang: str = 'uk') -> InlineKeyboardMarkup:
+    """Вибір поля для редагування."""
     builder = InlineKeyboardBuilder()
     
     fields = [
         (t("edit_field_title", lang), GoalEditField.title),
         (t("edit_field_description", lang), GoalEditField.description),
         (t("edit_field_deadline", lang), GoalEditField.deadline),
-        (t("edit_field_type", lang), GoalEditField.goal_type),
     ]
+    
+    if goal_type in ('target', 'metric'):
+        fields.append((t("edit_field_target", lang), GoalEditField.target_value))
     
     for text, field in fields:
         builder.add(InlineKeyboardButton(
@@ -256,39 +286,64 @@ def get_goal_edit_keyboard(goal_id: int, lang: str = 'en') -> InlineKeyboardMark
     return builder.as_markup()
 
 
-def get_goal_confirm_keyboard(goal_id: int, action: str, lang: str = 'en') -> InlineKeyboardMarkup:
-    """Клавіатура підтвердження дії з ціллю."""
+def get_confirm_keyboard(goal_id: int, action: str, lang: str = 'uk') -> InlineKeyboardMarkup:
+    """Підтвердження дії."""
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(
-            text=t("btn_confirm", lang),
-            callback_data=f"goal_confirm:{action}:{goal_id}"
-        ),
-        InlineKeyboardButton(
-            text=t("btn_cancel", lang),
-            callback_data="goals:back"
-        )
+        InlineKeyboardButton(text=t("btn_yes", lang), callback_data=f"goal_confirm:{action}:{goal_id}"),
+        InlineKeyboardButton(text=t("btn_no", lang), callback_data="goals:back")
     )
     return builder.as_markup()
 
 
-def get_progress_keyboard(lang: str = 'en') -> InlineKeyboardMarkup:
-    """Клавіатура швидкого вибору прогресу."""
+def get_habits_today_keyboard(habits: list, lang: str = 'uk') -> InlineKeyboardMarkup:
+    """Звички на сьогодні."""
     builder = InlineKeyboardBuilder()
     
-    # Швидкі кнопки прогресу
-    for progress in [10, 25, 50, 75, 100]:
-        builder.add(InlineKeyboardButton(
-            text=f"{progress}%",
-            callback_data=f"goal_progress_quick:{progress}"
+    for habit in habits:
+        done = habit.get('today_status') == 'done'
+        skipped = habit.get('today_status') == 'skipped'
+        streak = habit.get('current_streak', 0)
+        
+        if done:
+            status = "✅"
+        elif skipped:
+            status = "⏭"
+        else:
+            status = "⬜"
+        
+        streak_text = f" 🔥{streak}" if streak > 0 else ""
+        
+        builder.row(InlineKeyboardButton(
+            text=f"{status} {habit['title'][:25]}{streak_text}",
+            callback_data=GoalCallback(action=GoalAction.view, goal_id=habit['id']).pack()
         ))
     
-    builder.adjust(5)
+    builder.row(
+        InlineKeyboardButton(text=t("btn_add_habit", lang), callback_data="habit:add"),
+        InlineKeyboardButton(text=t("btn_back", lang), callback_data="menu:main")
+    )
     
-    # Кнопка для ручного вводу
-    builder.row(InlineKeyboardButton(
-        text=t("progress_custom", lang),
-        callback_data="goal_progress_custom"
-    ))
+    return builder.as_markup()
+
+
+def get_domain_tags_keyboard(lang: str = 'uk') -> InlineKeyboardMarkup:
+    """Вибір тегів доменів."""
+    builder = InlineKeyboardBuilder()
+    
+    tags = [
+        ("🏃 " + t("domain_health", lang), "health"),
+        ("📚 " + t("domain_learning", lang), "learning"),
+        ("💼 " + t("domain_career", lang), "career"),
+        ("💰 " + t("domain_finance", lang), "finance"),
+        ("👥 " + t("domain_relationships", lang), "relationships"),
+        ("🌱 " + t("domain_growth", lang), "growth"),
+    ]
+    
+    for text, tag in tags:
+        builder.add(InlineKeyboardButton(text=text, callback_data=f"tag:{tag}"))
+    
+    builder.adjust(2)
+    builder.row(InlineKeyboardButton(text=t("btn_skip", lang), callback_data="tag:skip"))
     
     return builder.as_markup()
