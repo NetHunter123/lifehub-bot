@@ -85,11 +85,7 @@ async def create_task(
     deadline: Optional[str] = None,
     scheduled_start: Optional[str] = None,
     estimated_duration: Optional[int] = None,
-    travel_time_before: int = 0,
-    location: Optional[str] = None,
     goal_id: Optional[int] = None,
-    is_recurring: bool = False,
-    recurrence_pattern: Optional[str] = None
 ) -> int:
     """Створити нову задачу. Повертає ID."""
     db = await get_db()
@@ -98,13 +94,11 @@ async def create_task(
             """
             INSERT INTO tasks (
                 user_id, title, description, priority, deadline,
-                scheduled_start, estimated_duration, travel_time_before,
-                location, goal_id, is_recurring, recurrence_pattern
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                scheduled_start, estimated_duration, goal_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (user_id, title, description, priority, deadline,
-             scheduled_start, estimated_duration, travel_time_before,
-             location, goal_id, int(is_recurring), recurrence_pattern)
+             scheduled_start, estimated_duration, goal_id)
         )
         await db.commit()
         return cursor.lastrowid

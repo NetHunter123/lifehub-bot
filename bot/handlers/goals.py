@@ -150,55 +150,59 @@ def get_progress_bar(progress: int, length: int = 10) -> str:
 
 
 def format_goals_list(goals: list, title: str, lang: str) -> str:
-    """Форматує список цілей.
-    
-    Звички/таски/метрики без parent_id не показуються тут — вони в /habits
-    """
+    """Форматує список цілей з деревом вкладеності."""
     if not goals:
         return f"{title}\n\n{t('goals_empty', lang)}"
     
     lines = [title, ""]
     
-    # Фільтруємо: показуємо тільки проєкти та targets БЕЗ parent_id
-    # Інші типи (habit, task, metric) показуємо тільки якщо мають parent_id
-    top_level = []
+    # Будуємо дерево: id -> children
+    children_map = {}
     for goal in goals:
-        gtype = goal['goal_type']
-        has_parent = goal.get('parent_id') is not None
-        
-        # Проєкти і таргети завжди показуємо на верхньому рівні
-        if gtype in ('project', 'target') and not has_parent:
-            top_level.append(goal)
-        # Для habit/task/metric показуємо тільки якщо немає parent (вони будуть як підцілі)
-        # Насправді привязані до проєкту показуються в _format_goal_tree
+        parent_id = goal.get('parent_id')
+        if parent_id:
+            if parent_id not in children_map:
+                children_map[parent_id] = []
+            children_map[parent_id].append(goal)
     
-    # Групуємо за типом
-    by_type = {}
-    for goal in top_level:
-        gtype = goal['goal_type']
-        if gtype not in by_type:
-            by_type[gtype] = []
-        by_type[gtype].append(goal)
+    # Топ-рівень: проекти та таргети без parent
+    top_level = [g for g in goals if g['goal_type'] in ('project', 'target') and not g.get('parent_id')]
     
-    type_order = ['project', 'target']
-    
-    for gtype in type_order:
-        if gtype in by_type:
-            emoji = GOAL_TYPE_EMOJI.get(GoalType(gtype), "🎯")
-            type_name = t(f"goal_type_{gtype}", lang)
-            lines.append(f"{emoji} <b>{type_name}</b>:")
-            
-            for goal in by_type[gtype]:
-                status = "✅" if goal.get('status') == 'completed' else "⬜"
-                progress = goal.get('progress', 0)
-                extra = f" [{progress}%]" if progress > 0 else ""
-                
-                lines.append(f"  {status} {goal['title']}{extra}")
-            
-            lines.append("")
-    
-    # Показуємо окремо звички без прив'язки
+    # Звички без parent
     orphan_habits = [g for g in goals if g['goal_type'] == 'habit' and not g.get('parent_id')]
+    
+    def format_goal_line(goal: dict, indent: int = 0) -> list:
+        """Форматує одну ціль та її дітей рекурсивно."""
+        result = []
+        prefix = "  " * indent
+        
+        emoji = GOAL_TYPE_EMOJI.get(GoalType(goal['goal_type']), "🎯")
+        status = "✅" if goal.get('status') == 'completed' else "⬜"
+        
+        if goal['goal_type'] == 'habit':
+            streak = goal.get('current_streak', 0)
+            extra = f" 🔥{streak}" if streak > 0 else ""
+        else:
+            progress = goal.get('progress', 0)
+            extra = f" [{progress}%]" if progress > 0 else ""
+        
+        result.append(f"{prefix}{status}{emoji} {goal['title']}{extra}")
+        
+        # Додаємо дітей
+        if goal['id'] in children_map:
+            for child in children_map[goal['id']]:
+                result.extend(format_goal_line(child, indent + 1))
+        
+        return result
+    
+    # Проєкти з деревом
+    if top_level:
+        lines.append(f"📋 <b>{t('goal_type_project', lang)}</b>:")
+        for goal in top_level:
+            lines.extend(format_goal_line(goal, 1))
+        lines.append("")
+    
+    # Звички без прив'язки
     if orphan_habits:
         lines.append(f"✅ <b>{t('goal_type_habit', lang)}</b>:")
         for habit in orphan_habits:
