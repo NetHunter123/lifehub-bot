@@ -1,299 +1,193 @@
 """
-Inline клавіатури для роботи з задачами.
+Inline клавіатури для задач.
+LifeHub Bot v4.0
 """
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.filters.callback_data import CallbackData
-from enum import Enum
-from typing import Optional
-
-from bot.locales import t
+from typing import List, Dict, Any
 
 
-class TaskAction(str, Enum):
-    view = "v"
-    complete = "c"
-    delete = "d"
-    edit = "e"
-    undo = "u"
-
-
-class TaskCallback(CallbackData, prefix="task"):
-    action: TaskAction
-    task_id: int
-
-
-class PriorityCallback(CallbackData, prefix="pri"):
-    priority: int
-    task_id: Optional[int] = None
-
-
-class DeadlineCallback(CallbackData, prefix="ddl"):
-    option: str  # today, tomorrow, week, custom, none
-    task_id: Optional[int] = None
-
-
-class TimeCallback(CallbackData, prefix="time"):
-    hour: Optional[int] = None
-    custom: bool = False  # Якщо True — перехід до ручного вводу
-
-
-class DurationCallback(CallbackData, prefix="dur"):
-    minutes: Optional[int] = None
-    custom: bool = False  # Якщо True — перехід до ручного вводу
-
-
-def get_priority_keyboard(lang: str = 'en', task_id: Optional[int] = None) -> InlineKeyboardMarkup:
-    """Клавіатура вибору пріоритету."""
-    builder = InlineKeyboardBuilder()
-    priorities = [
-        (t("priority_urgent", lang), 0),
-        (t("priority_high", lang), 1),
-        (t("priority_medium", lang), 2),
-        (t("priority_low", lang), 3),
-    ]
-    for text, priority in priorities:
-        builder.add(InlineKeyboardButton(
-            text=text,
-            callback_data=PriorityCallback(priority=priority, task_id=task_id).pack()
-        ))
-    builder.adjust(2)
-    return builder.as_markup()
-
-
-def get_deadline_keyboard(lang: str = 'en', task_id: Optional[int] = None) -> InlineKeyboardMarkup:
-    """Клавіатура вибору дедлайну з можливістю обрати довільну дату."""
-    builder = InlineKeyboardBuilder()
-    options = [
-        (t("deadline_today", lang), "today"),
-        (t("deadline_tomorrow", lang), "tomorrow"),
-        (t("deadline_week", lang), "week"),
-        (t("deadline_custom", lang), "custom"),  # Обрати дату
-        (t("deadline_none", lang), "none"),
-    ]
-    for text, option in options:
-        builder.add(InlineKeyboardButton(
-            text=text,
-            callback_data=DeadlineCallback(option=option, task_id=task_id).pack()
-        ))
-    builder.adjust(2, 2, 1)
-    return builder.as_markup()
-
-
-def get_time_keyboard(lang: str = 'en') -> InlineKeyboardMarkup:
-    """Клавіатура вибору часу з можливістю ввести свій."""
-    builder = InlineKeyboardBuilder()
-    times = [
-        ("🌅 08:00", 8), ("🌅 09:00", 9),
-        ("☀️ 10:00", 10), ("☀️ 12:00", 12),
-        ("🌤 14:00", 14), ("🌤 16:00", 16),
-        ("🌆 18:00", 18), ("🌙 20:00", 20),
-    ]
-    for text, hour in times:
-        builder.add(InlineKeyboardButton(
-            text=text,
-            callback_data=TimeCallback(hour=hour).pack()
-        ))
-    # Кнопка для кастомного часу
-    builder.add(InlineKeyboardButton(
-        text=t("time_custom", lang),
-        callback_data=TimeCallback(custom=True).pack()
-    ))
-    # Без часу
-    builder.add(InlineKeyboardButton(
-        text=t("time_none", lang),
-        callback_data=TimeCallback(hour=None).pack()
-    ))
-    builder.adjust(4, 4, 2)
-    return builder.as_markup()
-
-
-def get_duration_keyboard(lang: str = 'en') -> InlineKeyboardMarkup:
-    """Клавіатура вибору тривалості з можливістю ввести свою."""
-    builder = InlineKeyboardBuilder()
-    durations = [
-        (t("duration_15m", lang), 15),
-        (t("duration_30m", lang), 30),
-        (t("duration_45m", lang), 45),
-        (t("duration_1h", lang), 60),
-        (t("duration_1_5h", lang), 90),
-        (t("duration_2h", lang), 120),
-        (t("duration_3h", lang), 180),
-        (t("duration_4h", lang), 240),
-    ]
-    for text, minutes in durations:
-        builder.add(InlineKeyboardButton(
-            text=text,
-            callback_data=DurationCallback(minutes=minutes).pack()
-        ))
-    # Кнопка для кастомної тривалості
-    builder.add(InlineKeyboardButton(
-        text=t("duration_custom", lang),
-        callback_data=DurationCallback(custom=True).pack()
-    ))
-    # Без тривалості
-    builder.add(InlineKeyboardButton(
-        text=t("time_none", lang),
-        callback_data=DurationCallback(minutes=None).pack()
-    ))
-    builder.adjust(4, 4, 2)
-    return builder.as_markup()
-
-
-def get_task_actions_keyboard(task_id: int, lang: str = 'en', is_completed: bool = False) -> InlineKeyboardMarkup:
-    """Клавіатура дій з конкретною задачею."""
+def get_task_actions(task_id: int, is_completed: bool = False) -> InlineKeyboardMarkup:
+    """Дії для задачі."""
     builder = InlineKeyboardBuilder()
     
-    if is_completed:
-        # Для виконаних задач — тільки Undo (повернути в роботу) і Назад
-        builder.row(
-            InlineKeyboardButton(
-                text=t("btn_restore", lang),
-                callback_data=TaskCallback(action=TaskAction.undo, task_id=task_id).pack()
-            )
-        )
-        builder.row(
-            InlineKeyboardButton(
-                text=t("btn_delete", lang),
-                callback_data=TaskCallback(action=TaskAction.delete, task_id=task_id).pack()
-            ),
-            InlineKeyboardButton(
-                text=t("btn_back", lang),
-                callback_data="tasks:back"
-            )
+    if not is_completed:
+        builder.button(
+            text="✅ Виконати",
+            callback_data=f"task:done:{task_id}"
         )
     else:
-        # Для активних задач — повний набір
-        builder.row(
-            InlineKeyboardButton(
-                text=t("btn_done", lang),
-                callback_data=TaskCallback(action=TaskAction.complete, task_id=task_id).pack()
-            ),
-            InlineKeyboardButton(
-                text=t("btn_edit", lang),
-                callback_data=TaskCallback(action=TaskAction.edit, task_id=task_id).pack()
-            )
-        )
-        builder.row(
-            InlineKeyboardButton(
-                text=t("btn_delete", lang),
-                callback_data=TaskCallback(action=TaskAction.delete, task_id=task_id).pack()
-            ),
-            InlineKeyboardButton(
-                text=t("btn_back", lang),
-                callback_data="tasks:back"
-            )
+        builder.button(
+            text="↩️ Повернути",
+            callback_data=f"task:undone:{task_id}"
         )
     
-    return builder.as_markup()
-
-
-def get_tasks_list_keyboard(tasks: list, lang: str = 'en', page: int = 0, per_page: int = 5, filter_type: str = "today") -> InlineKeyboardMarkup:
-    """Клавіатура зі списком задач + пагінація + фільтри."""
-    builder = InlineKeyboardBuilder()
-    
-    if tasks:
-        start = page * per_page
-        end = start + per_page
-        page_tasks = tasks[start:end]
-        
-        for task in page_tasks:
-            priority_emoji = ["🔴", "🟠", "🟡", "🟢"][task["priority"]]
-            status_emoji = "✅" if task["is_completed"] else "⬜"
-            builder.row(InlineKeyboardButton(
-                text=f"{status_emoji} {priority_emoji} {task['title'][:30]}",
-                callback_data=TaskCallback(action=TaskAction.view, task_id=task["id"]).pack()
-            ))
-        
-        total_pages = (len(tasks) + per_page - 1) // per_page
-        if total_pages > 1:
-            nav_buttons = []
-            if page > 0:
-                nav_buttons.append(InlineKeyboardButton(text="◀️", callback_data=f"page:{page-1}"))
-            nav_buttons.append(InlineKeyboardButton(text=f"{page+1}/{total_pages}", callback_data="noop"))
-            if page < total_pages - 1:
-                nav_buttons.append(InlineKeyboardButton(text="▶️", callback_data=f"page:{page+1}"))
-            builder.row(*nav_buttons)
-    
-    # Фільтри
-    filters = []
-    if filter_type != "today":
-        filters.append(InlineKeyboardButton(text=t("filter_today", lang), callback_data="filter:today"))
-    if filter_type != "all":
-        filters.append(InlineKeyboardButton(text=t("filter_all", lang), callback_data="filter:all"))
-    if filter_type != "history":
-        filters.append(InlineKeyboardButton(text=t("filter_history", lang), callback_data="filter:history"))
-    
-    if filters:
-        builder.row(*filters)
-    
-    # Кнопка додавання (не показуємо в історії)
-    if filter_type != "history":
-        builder.row(InlineKeyboardButton(text=t("btn_add_task", lang), callback_data="task:add"))
-    
-    return builder.as_markup()
-
-
-def get_confirm_keyboard(task_id: int, action: str, lang: str = 'en') -> InlineKeyboardMarkup:
-    """Клавіатура підтвердження дії."""
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text=t("btn_yes", lang), callback_data=f"confirm:{action}:{task_id}"),
-        InlineKeyboardButton(text=t("btn_no", lang), callback_data="cancel")
+    builder.button(
+        text="✏️",
+        callback_data=f"task:edit:{task_id}"
     )
-    return builder.as_markup()
-
-
-def get_what_next_keyboard(lang: str = 'en') -> InlineKeyboardMarkup:
-    """Клавіатура 'Що далі?' після створення задачі."""
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text=t("btn_add_another", lang), callback_data="task:add"),
-        InlineKeyboardButton(text=t("btn_view_tasks", lang), callback_data="tasks:view")
+    builder.button(
+        text="🗑",
+        callback_data=f"task:delete:{task_id}"
     )
+    
+    builder.adjust(1, 2)  # Перша кнопка окремо, наступні 2 в ряд
     return builder.as_markup()
 
 
-class EditField(str, Enum):
-    """Поля для редагування."""
-    title = "title"
-    description = "description"
-    priority = "priority"
-    deadline = "deadline"
-    time = "time"
-    duration = "duration"
-
-
-class EditCallback(CallbackData, prefix="edit"):
-    """Callback для редагування."""
-    field: EditField
-    task_id: int
-
-
-def get_edit_field_keyboard(task_id: int, lang: str = 'en') -> InlineKeyboardMarkup:
-    """Клавіатура вибору поля для редагування."""
+def get_tasks_list(tasks: List[Dict[str, Any]], page: int = 0, per_page: int = 5) -> InlineKeyboardMarkup:
+    """Список задач з пагінацією."""
     builder = InlineKeyboardBuilder()
     
-    fields = [
-        (t("edit_field_title", lang), EditField.title),
-        (t("edit_field_description", lang), EditField.description),
-        (t("edit_field_priority", lang), EditField.priority),
-        (t("edit_field_deadline", lang), EditField.deadline),
-        (t("edit_field_time", lang), EditField.time),
-        (t("edit_field_duration", lang), EditField.duration),
-    ]
+    # Визначаємо діапазон
+    start = page * per_page
+    end = start + per_page
+    page_tasks = tasks[start:end]
     
-    for text, field in fields:
-        builder.add(InlineKeyboardButton(
+    # Кнопки задач
+    for task in page_tasks:
+        status = "✅" if task['is_completed'] else "⬜"
+        priority_icons = ["🔴", "🟠", "🟡", "🟢"]
+        priority = priority_icons[task.get('priority', 2)]
+        
+        text = f"{status} {priority} {task['title'][:30]}"
+        builder.button(
             text=text,
-            callback_data=EditCallback(field=field, task_id=task_id).pack()
-        ))
+            callback_data=f"task:view:{task['id']}"
+        )
+    
+    builder.adjust(1)  # По одній кнопці в ряд
+    
+    # Пагінація
+    pagination = []
+    total_pages = (len(tasks) + per_page - 1) // per_page
+    
+    if page > 0:
+        pagination.append(
+            InlineKeyboardButton(text="◀️", callback_data=f"tasks:page:{page-1}")
+        )
+    
+    pagination.append(
+        InlineKeyboardButton(text=f"{page+1}/{total_pages}", callback_data="tasks:page:current")
+    )
+    
+    if page < total_pages - 1:
+        pagination.append(
+            InlineKeyboardButton(text="▶️", callback_data=f"tasks:page:{page+1}")
+        )
+    
+    if total_pages > 1:
+        builder.row(*pagination)
+    
+    # Кнопка додавання
+    builder.row(
+        InlineKeyboardButton(text="➕ Додати задачу", callback_data="task:add")
+    )
+    
+    return builder.as_markup()
+
+
+def get_priority_keyboard() -> InlineKeyboardMarkup:
+    """Вибір пріоритету."""
+    builder = InlineKeyboardBuilder()
+    
+    builder.button(text="🔴 Терміново", callback_data="task:priority:0")
+    builder.button(text="🟠 Високий", callback_data="task:priority:1")
+    builder.button(text="🟡 Середній", callback_data="task:priority:2")
+    builder.button(text="🟢 Низький", callback_data="task:priority:3")
     
     builder.adjust(2)
-    builder.row(InlineKeyboardButton(
-        text=t("btn_back", lang),
-        callback_data=TaskCallback(action=TaskAction.view, task_id=task_id).pack()
-    ))
+    return builder.as_markup()
+
+
+def get_deadline_keyboard() -> InlineKeyboardMarkup:
+    """Вибір дедлайну."""
+    builder = InlineKeyboardBuilder()
     
+    builder.button(text="📅 Сьогодні", callback_data="task:deadline:today")
+    builder.button(text="📅 Завтра", callback_data="task:deadline:tomorrow")
+    builder.button(text="📅 Цей тиждень", callback_data="task:deadline:week")
+    builder.button(text="📅 Без дедлайну", callback_data="task:deadline:none")
+    builder.button(text="📅 Ввести дату", callback_data="task:deadline:custom")
+    builder.button(text="❌ Скасувати", callback_data="task:cancel")
+    
+    builder.adjust(2, 2, 2)
+    return builder.as_markup()
+
+
+def get_time_keyboard() -> InlineKeyboardMarkup:
+    """Вибір часу."""
+    builder = InlineKeyboardBuilder()
+    
+    builder.button(text="🌅 09:00", callback_data="task:time:09:00")
+    builder.button(text="☀️ 14:00", callback_data="task:time:14:00")
+    builder.button(text="🌆 18:00", callback_data="task:time:18:00")
+    builder.button(text="⏰ Ввести час", callback_data="task:time:custom")
+    builder.button(text="⏭ Без часу", callback_data="task:time:none")
+    
+    builder.adjust(3, 2)
+    return builder.as_markup()
+
+
+def get_goal_keyboard(projects: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
+    """Вибір проєкту для прив'язки."""
+    builder = InlineKeyboardBuilder()
+    
+    for project in projects[:10]:  # Максимум 10
+        builder.button(
+            text=f"📁 {project['title'][:25]}",
+            callback_data=f"task:goal:{project['id']}"
+        )
+    
+    builder.button(text="⏭ Без проєкту", callback_data="task:goal:none")
+    
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def get_recurring_keyboard() -> InlineKeyboardMarkup:
+    """Вибір типу повторення."""
+    builder = InlineKeyboardBuilder()
+    
+    builder.button(text="📅 Щодня", callback_data="task:recurring:daily")
+    builder.button(text="📅 По буднях", callback_data="task:recurring:weekdays")
+    builder.button(text="📅 Обрати дні", callback_data="task:recurring:custom")
+    builder.button(text="⏭ Не повторювати", callback_data="task:recurring:none")
+    
+    builder.adjust(2, 2)
+    return builder.as_markup()
+
+
+def get_weekdays_inline(selected: List[int] = None) -> InlineKeyboardMarkup:
+    """Inline вибір днів тижня."""
+    selected = selected or []
+    builder = InlineKeyboardBuilder()
+    
+    days = [
+        ("Пн", 1), ("Вт", 2), ("Ср", 3), ("Чт", 4),
+        ("Пт", 5), ("Сб", 6), ("Нд", 7)
+    ]
+    
+    for name, num in days:
+        mark = "✅" if num in selected else "⬜"
+        builder.button(
+            text=f"{mark} {name}",
+            callback_data=f"task:day:{num}"
+        )
+    
+    builder.button(text="✅ Готово", callback_data="task:days:done")
+    
+    builder.adjust(4, 3, 1)
+    return builder.as_markup()
+
+
+def get_delete_confirm(task_id: int) -> InlineKeyboardMarkup:
+    """Підтвердження видалення."""
+    builder = InlineKeyboardBuilder()
+    
+    builder.button(text="✅ Так, видалити", callback_data=f"task:delete_confirm:{task_id}")
+    builder.button(text="❌ Скасувати", callback_data=f"task:view:{task_id}")
+    
+    builder.adjust(2)
     return builder.as_markup()

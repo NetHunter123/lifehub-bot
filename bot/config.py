@@ -1,45 +1,43 @@
 """
 Конфігурація бота.
-Завантажує змінні середовища з .env файлу.
+LifeHub Bot v4.0
 """
 
 import os
 from pathlib import Path
+from dataclasses import dataclass
 from dotenv import load_dotenv
 
-# Завантажуємо .env файл
 load_dotenv()
 
-# Базова директорія проєкту
-BASE_DIR = Path(__file__).resolve().parent.parent
 
-
+@dataclass
 class Config:
-    """Налаштування бота."""
+    """Конфігурація застосунку."""
     
     # Telegram
     BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
     ADMIN_ID: int = int(os.getenv("ADMIN_ID", "0"))
     
-    # База даних
-    DATABASE_PATH: Path = BASE_DIR / os.getenv("DATABASE_PATH", "data/lifehub.db")
+    # Database
+    DATABASE_PATH: Path = Path(os.getenv("DATABASE_PATH", "data/lifehub.db"))
     
-    # Часовий пояс
+    # Timezone
     TIMEZONE: str = os.getenv("TIMEZONE", "Europe/Berlin")
     
-    # Нагадування (години)
-    MORNING_REMINDER_HOUR: int = 8
-    EVENING_REMINDER_HOUR: int = 21
+    # Default language
+    DEFAULT_LANGUAGE: str = "uk"
     
-    @classmethod
-    def validate(cls) -> bool:
-        """Перевіряє наявність обов'язкових налаштувань."""
-        if not cls.BOT_TOKEN:
+    # Reminders
+    MORNING_TIME: str = "08:00"
+    EVENING_TIME: str = "21:00"
+    
+    def validate(self) -> None:
+        """Перевірка обов'язкових параметрів."""
+        if not self.BOT_TOKEN:
             raise ValueError("BOT_TOKEN не встановлено! Додай його в .env файл.")
-        if not cls.ADMIN_ID:
+        if not self.ADMIN_ID:
             raise ValueError("ADMIN_ID не встановлено! Додай його в .env файл.")
-        return True
 
 
-# Експортуємо для зручності
 config = Config()

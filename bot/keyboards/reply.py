@@ -1,36 +1,106 @@
-"""Reply клавіатури."""
+"""
+Reply клавіатури (постійне меню).
+LifeHub Bot v4.0
+"""
 
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from aiogram.utils.keyboard import ReplyKeyboardBuilder
-from bot.locales import t
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from bot.locales import uk
 
 
-def get_main_reply_keyboard(lang: str = 'uk') -> ReplyKeyboardMarkup:
-    builder = ReplyKeyboardBuilder()
-    builder.row(
-        KeyboardButton(text=t("btn_today", lang)),
+def get_main_menu() -> ReplyKeyboardMarkup:
+    """Головне меню."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text="📅 Сьогодні"),
+                KeyboardButton(text="📋 Задачі"),
+            ],
+            [
+                KeyboardButton(text="🎯 Цілі"),
+                KeyboardButton(text="✅ Звички"),
+            ],
+            [
+                KeyboardButton(text="📚 Книги"),
+                KeyboardButton(text="⚙️ Налаштування"),
+            ],
+        ],
+        resize_keyboard=True,
+        input_field_placeholder="Обери дію..."
     )
-    builder.row(
-        KeyboardButton(text=t("btn_tasks", lang)),
-        KeyboardButton(text=t("btn_goals", lang))
+
+
+def get_cancel_keyboard() -> ReplyKeyboardMarkup:
+    """Клавіатура зі скасуванням."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="❌ Скасувати")]
+        ],
+        resize_keyboard=True
     )
-    builder.row(
-        KeyboardButton(text=t("btn_habits", lang)),
-        KeyboardButton(text=t("btn_books", lang))
+
+
+def get_skip_cancel_keyboard() -> ReplyKeyboardMarkup:
+    """Клавіатура з пропуском і скасуванням."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text="⏭ Пропустити"),
+                KeyboardButton(text="❌ Скасувати")
+            ]
+        ],
+        resize_keyboard=True
     )
-    return builder.as_markup(resize_keyboard=True, is_persistent=True)
 
 
-def get_cancel_keyboard(lang: str = 'uk') -> ReplyKeyboardMarkup:
-    builder = ReplyKeyboardBuilder()
-    builder.add(KeyboardButton(text=t("btn_cancel", lang)))
-    return builder.as_markup(resize_keyboard=True)
-
-
-def get_skip_cancel_keyboard(lang: str = 'uk') -> ReplyKeyboardMarkup:
-    builder = ReplyKeyboardBuilder()
-    builder.row(
-        KeyboardButton(text=t("btn_skip", lang)),
-        KeyboardButton(text=t("btn_cancel", lang))
+def get_confirm_keyboard() -> ReplyKeyboardMarkup:
+    """Клавіатура підтвердження."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text="✅ Підтвердити"),
+                KeyboardButton(text="❌ Скасувати")
+            ]
+        ],
+        resize_keyboard=True
     )
-    return builder.as_markup(resize_keyboard=True)
+
+
+def get_yes_no_keyboard() -> ReplyKeyboardMarkup:
+    """Клавіатура Так/Ні."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text="Так"),
+                KeyboardButton(text="Ні")
+            ]
+        ],
+        resize_keyboard=True
+    )
+
+
+def get_weekdays_keyboard(selected: list = None) -> ReplyKeyboardMarkup:
+    """Клавіатура вибору днів тижня."""
+    selected = selected or []
+    days = [
+        ("Пн", 1), ("Вт", 2), ("Ср", 3), ("Чт", 4),
+        ("Пт", 5), ("Сб", 6), ("Нд", 7)
+    ]
+    
+    buttons = []
+    for name, num in days:
+        mark = "✅" if num in selected else "⬜"
+        buttons.append(KeyboardButton(text=f"{mark} {name}"))
+    
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            buttons[:4],  # Пн-Чт
+            buttons[4:],  # Пт-Нд
+            [KeyboardButton(text="✅ Готово"), KeyboardButton(text="❌ Скасувати")]
+        ],
+        resize_keyboard=True
+    )
+
+
+def remove_keyboard() -> ReplyKeyboardRemove:
+    """Видалити клавіатуру."""
+    return ReplyKeyboardRemove()

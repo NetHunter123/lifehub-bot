@@ -1,415 +1,498 @@
 """
-Обробники для /today dashboard та time blocks.
+Dashboard /today — розклад на сьогодні.
+LifeHub Bot v4.0
+
+Два режими:
+- За часом (хронологічний)
+- За типом (групування)
 """
 
-from datetime import datetime, date, timedelta
+from datetime import date
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.keyboards.reply import get_main_reply_keyboard, get_cancel_keyboard
-from bot.locales import t, get_user_lang
-from bot.database import today_queries as tq
-from bot.database import goal_queries as gq
+from bot.database import queries
+from bot.keyboards.today import get_today_keyboard, get_recurring_task_actions
+from bot.locales import uk
+
 
 router = Router()
 
 
-# ============== FSM ==============
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                              КОМАНДИ                                         ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
 
-class TimeBlockCreation(StatesGroup):
-    title = State()
-    start_time = State()
-    end_time = State()
-    days = State()
+@router.message(Command("today"))
+async def cmd_today(message: Message, sort_mode: str = 'time'):
+    """Dashboard на сьогодні."""
+    user_id = message.from_user.id
+    schedule = await queries.get_today_schedule(user_id)
+    
+    text = await _format_today(schedule, sort_mode)
+    
+    await message.answer(
+        text,
+        parse_mode="HTML",
+        reply_markup=get_today_keyboard(sort_mode)
+    )
 
 
-# ============== HELPERS ==============
-
-def format_today_schedule(schedule: dict, lang: str) -> str:
-    """Форматує розклад на сьогодні."""
+async def _format_today(schedule: dict, sort_mode: str) -> str:
+    """Форматування розкладу."""
     today = date.today()
-    weekday_names = {
-        1: 'Понеділок', 2: 'Вівторок', 3: 'Середа', 4: 'Четвер',
-        5: "П'ятниця", 6: 'Субота', 7: 'Неділя'
-    }
-    weekday = weekday_names.get(today.isoweekday(), '')
+    weekday_name = uk.TODAY['weekdays'][today.weekday()]
+    date_str = today.strftime("%d.%m")
     
-    lines = [
-        f"📅 <b>{t('today_title', lang)}</b>",
-        f"{today.strftime('%d.%m.%Y')} • {weekday}",
-        ""
-    ]
+    header = f"📅 <b>СЬОГОДНІ</b> — {weekday_name}, {date_str}\n\n"
     
-    # Статистика
-    total_habits = len(schedule['habits'])
-    done_habits = sum(1 for h in schedule['habits'] if h.get('today_status') == 'done')
-    total_tasks = len(schedule['tasks'])
+    if not schedule['timeline']:
+        return header + uk.TODAY['empty']
     
-    # Time blocks (пропущені показуємо окремо)
-    active_blocks = [tb for tb in schedule['time_blocks'] if not tb['is_skipped']]
-    skipped_blocks = [tb for tb in schedule['time_blocks'] if tb['is_skipped']]
+    if sort_mode == 'time':
+        body = _format_by_time(schedule)
+    else:
+        body = _format_by_type(schedule)
     
-    if active_blocks:
-        lines.append(f"🏢 <b>{t('time_blocks', lang)}:</b>")
-        for tb in active_blocks:
-            lines.append(f"  {tb['start_time']}-{tb['end_time']} — {tb['title']}")
-        lines.append("")
+    # Прогрес
+    done, total = _calculate_progress(schedule)
+    percent = int(done / total * 100) if total > 0 else 0
     
-    if skipped_blocks:
-        lines.append(f"⏭ <b>{t('skipped_today', lang)}:</b>")
-        for tb in skipped_blocks:
-            lines.append(f"  <s>{tb['title']}</s>")
-        lines.append("")
+    footer = f"\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    footer += f"📊 Прогрес: {done}/{total} ({percent}%)"
     
-    # Timeline (задачі та звички з часом)
-    timed_items = [item for item in schedule['timeline'] if item['type'] in ('task', 'habit')]
-    if timed_items:
-        lines.append(f"⏰ <b>{t('scheduled', lang)}:</b>")
-        for item in timed_items:
-            if item['type'] == 'task':
-                fixed = "📌" if item.get('is_fixed') else ""
-                priority_emoji = {0: '🔴', 1: '🟠', 2: '🟡', 3: '🟢'}.get(item.get('priority', 2), '🟡')
-                goal_suffix = f" [{item['goal_title']}]" if item.get('goal_title') else ""
-                lines.append(f"  {item['start_time']} {fixed}{priority_emoji} {item['title']}{goal_suffix}")
-            elif item['type'] == 'habit':
-                status = "✅" if item.get('today_status') == 'done' else "⬜"
-                streak = f" 🔥{item['streak']}" if item.get('streak', 0) > 0 else ""
-                duration = f" ({item['duration']}хв)" if item.get('duration') else ""
-                lines.append(f"  {item['start_time']} {status} {item['title']}{streak}{duration}")
-        lines.append("")
+    return header + body + footer
+
+
+def _format_by_time(schedule: dict) -> str:
+    """Форматування хронологічно."""
+    lines = []
     
-    # Задачі без часу
-    untimed_tasks = [t for t in schedule['tasks'] if not t.get('scheduled_start')]
-    if untimed_tasks:
-        lines.append(f"📋 <b>{t('tasks', lang)}:</b>")
-        for task in untimed_tasks[:10]:  # Max 10
-            priority_emoji = {0: '🔴', 1: '🟠', 2: '🟡', 3: '🟢'}.get(task.get('priority', 2), '🟡')
-            goal_suffix = f" [{task['goal_title']}]" if task.get('goal_title') else ""
-            lines.append(f"  {priority_emoji} {task['title']}{goal_suffix}")
-        lines.append("")
+    # Елементи з часом
+    with_time = [i for i in schedule['timeline'] if i.get('time')]
+    without_time = [i for i in schedule['timeline'] if not i.get('time')]
     
-    # Звички без часу
-    untimed_habits = [h for h in schedule['habits'] if not h.get('reminder_time')]
-    if untimed_habits:
-        lines.append(f"✅ <b>{t('habits', lang)}:</b>")
-        for habit in untimed_habits:
-            status = "✅" if habit.get('today_status') == 'done' else "⬜"
-            streak = f" 🔥{habit.get('current_streak', 0)}" if habit.get('current_streak', 0) > 0 else ""
-            lines.append(f"  {status} {habit['title']}{streak}")
-        lines.append("")
+    for item in with_time:
+        lines.append(_format_item(item))
     
-    # Підсумок
-    lines.append("━" * 25)
-    lines.append(f"✅ {t('habits', lang)}: {done_habits}/{total_habits} | 📋 {t('tasks', lang)}: {total_tasks}")
+    # Елементи без часу
+    if without_time:
+        lines.append("── без часу ──")
+        for item in without_time:
+            lines.append(_format_item(item, show_time=False))
     
     return "\n".join(lines)
 
 
-def get_today_keyboard(schedule: dict, lang: str) -> InlineKeyboardMarkup:
-    """Клавіатура для /today."""
-    builder = InlineKeyboardBuilder()
+def _format_by_type(schedule: dict) -> str:
+    """Форматування за типом."""
+    lines = []
     
-    # Кнопки для time blocks (skip/unskip)
-    for tb in schedule['time_blocks']:
-        if tb['is_skippable']:
-            if tb['is_skipped']:
-                builder.row(InlineKeyboardButton(
-                    text=f"↩️ {tb['title']}",
-                    callback_data=f"tb_unskip:{tb['id']}"
-                ))
-            else:
-                builder.row(InlineKeyboardButton(
-                    text=f"⏭ {t('skip', lang)} {tb['title']}",
-                    callback_data=f"tb_skip:{tb['id']}"
-                ))
+    # 1. Фіксований час
+    fixed = [i for i in schedule['timeline'] 
+             if i['type'] == 'recurring_task' and i.get('is_fixed')]
+    if fixed:
+        lines.append("🏫 <b>ФІКСОВАНИЙ ЧАС:</b>")
+        for item in fixed:
+            lines.append("  " + _format_item(item))
+        lines.append("")
     
-    # Дії
-    builder.row(
-        InlineKeyboardButton(text=f"➕ {t('btn_add_task', lang)}", callback_data="task:add"),
-        InlineKeyboardButton(text=f"✅ {t('habits', lang)}", callback_data="habits:today")
+    # 2. Звички без проєкту
+    habits = [i for i in schedule['timeline'] 
+              if i['type'] == 'habit' and not _get_parent_project(i)]
+    if habits:
+        lines.append("✅ <b>ЗВИЧКИ:</b>")
+        for item in sorted(habits, key=lambda x: x.get('time') or '99:99'):
+            lines.append("  " + _format_item(item))
+        lines.append("")
+    
+    # 3. Задачі без проєкту
+    tasks = [i for i in schedule['timeline'] 
+             if i['type'] in ('task', 'recurring_task') 
+             and not i.get('is_fixed')
+             and not _get_goal_id(i)]
+    if tasks:
+        lines.append("📋 <b>ЗАДАЧІ:</b>")
+        for item in sorted(tasks, key=lambda x: (x.get('priority', 2), x.get('time') or '99:99')):
+            lines.append("  " + _format_item(item))
+        lines.append("")
+    
+    # 4. Проєкти з їх items
+    project_items = {}
+    for item in schedule['timeline']:
+        project_id = _get_goal_id(item) or _get_parent_project(item)
+        if project_id:
+            if project_id not in project_items:
+                project_items[project_id] = {
+                    'title': item.get('goal_title') or '...',
+                    'items': []
+                }
+            project_items[project_id]['items'].append(item)
+    
+    for project_id, data in project_items.items():
+        lines.append(f"📁 <b>ПРОЄКТ «{data['title']}»:</b>")
+        for item in sorted(data['items'], key=lambda x: x.get('time') or '99:99'):
+            lines.append("  " + _format_item(item))
+        lines.append("")
+    
+    return "\n".join(lines).strip()
+
+
+def _format_item(item: dict, show_time: bool = True) -> str:
+    """Форматування одного елемента."""
+    parts = []
+    
+    # Статус
+    if item['type'] == 'habit':
+        status = item.get('today_status')
+        if status == 'done':
+            parts.append("✅")
+        elif status == 'skipped':
+            parts.append("⏭")
+        else:
+            parts.append("⬜")
+    elif item['type'] == 'recurring_task':
+        occ_status = item.get('occurrence', {}).get('status', 'pending')
+        if occ_status == 'done':
+            parts.append("✅")
+        elif occ_status == 'skipped':
+            parts.append("⏭")
+        else:
+            parts.append("⬜")
+    elif item['type'] == 'task':
+        # Пріоритет
+        priority_icons = ["🔴", "🟠", "🟡", "🟢"]
+        priority = item.get('priority', 2)
+        parts.append(priority_icons[priority])
+    
+    # Час
+    if show_time and item.get('time'):
+        time_str = item['time']
+        if item.get('end_time'):
+            time_str += f"-{item['end_time']}"
+        parts.append(time_str)
+    
+    # Назва
+    parts.append(item.get('title', '???'))
+    
+    # Duration для habit
+    if item['type'] == 'habit' and item.get('duration'):
+        parts.append(f"({item['duration']} хв)")
+    
+    # Streak
+    if item.get('streak'):
+        parts.append(f"🔥{item['streak']}")
+    
+    # Occurrence number
+    if item.get('occurrence', {}).get('occurrence_number'):
+        parts.append(f"[#{item['occurrence']['occurrence_number']}]")
+    
+    # Fixed marker
+    if item.get('is_fixed'):
+        parts.append("📌")
+    
+    # Project link
+    if item.get('goal_title') and item['type'] not in ('habit',):
+        parts.append(f"→ [{item['goal_title']}]")
+    
+    return " ".join(str(p) for p in parts)
+
+
+def _get_goal_id(item: dict) -> int | None:
+    """Отримати goal_id для task."""
+    if item['type'] == 'task':
+        return item.get('goal_id')
+    return None
+
+
+def _get_parent_project(item: dict) -> int | None:
+    """Отримати parent_id для habit."""
+    if item['type'] == 'habit':
+        return item.get('parent_id')
+    return None
+
+
+def _calculate_progress(schedule: dict) -> tuple[int, int]:
+    """Підрахунок прогресу (done, total)."""
+    done = 0
+    total = 0
+    
+    for item in schedule['timeline']:
+        total += 1
+        
+        if item['type'] == 'habit':
+            if item.get('today_status') == 'done':
+                done += 1
+        elif item['type'] == 'recurring_task':
+            if item.get('occurrence', {}).get('status') == 'done':
+                done += 1
+        elif item['type'] == 'task':
+            # Task зі schedule — перевіряємо is_completed
+            pass  # Якщо task тут — він ще не виконаний
+    
+    return (done, total)
+
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                            CALLBACKS                                         ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+@router.callback_query(F.data.startswith("today:sort:"))
+async def callback_sort_mode(callback: CallbackQuery):
+    """Змінити режим сортування."""
+    mode = callback.data.replace("today:sort:", "")
+    
+    user_id = callback.from_user.id
+    schedule = await queries.get_today_schedule(user_id)
+    text = await _format_today(schedule, mode)
+    
+    await callback.message.edit_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=get_today_keyboard(mode)
     )
-    builder.row(
-        InlineKeyboardButton(text=f"🏢 {t('manage_blocks', lang)}", callback_data="blocks:manage"),
-        InlineKeyboardButton(text="🔄", callback_data="today:refresh")
-    )
-    
-    return builder.as_markup()
-
-
-# ============== COMMANDS ==============
-
-@router.message(Command("today"))
-async def cmd_today(message: Message) -> None:
-    """Показати розклад на сьогодні."""
-    user_id = message.from_user.id
-    lang = get_user_lang(user_id)
-    
-    schedule = await tq.get_today_schedule(user_id)
-    text = format_today_schedule(schedule, lang)
-    
-    await message.answer(text, reply_markup=get_today_keyboard(schedule, lang))
-
-
-@router.message(F.text.in_(["📅 Сьогодні", "📅 Today"]))
-async def btn_today(message: Message) -> None:
-    await cmd_today(message)
+    await callback.answer()
 
 
 @router.callback_query(F.data == "today:refresh")
-async def refresh_today(callback: CallbackQuery) -> None:
+async def callback_refresh(callback: CallbackQuery):
+    """Оновити dashboard."""
     user_id = callback.from_user.id
-    lang = get_user_lang(user_id)
+    schedule = await queries.get_today_schedule(user_id)
+    text = await _format_today(schedule, 'time')
     
-    schedule = await tq.get_today_schedule(user_id)
-    text = format_today_schedule(schedule, lang)
-    
-    await callback.message.edit_text(text, reply_markup=get_today_keyboard(schedule, lang))
-    await callback.answer(t("refreshed", lang))
+    await callback.message.edit_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=get_today_keyboard('time')
+    )
+    await callback.answer("🔄 Оновлено")
 
 
-# ============== TIME BLOCK SKIP ==============
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                         RECURRING TASKS                                      ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
 
-@router.callback_query(F.data.startswith("tb_skip:"))
-async def skip_time_block(callback: CallbackQuery) -> None:
+@router.callback_query(F.data.startswith("recurring:done:"))
+async def callback_recurring_done(callback: CallbackQuery):
+    """Позначити recurring task виконаною."""
+    task_id = int(callback.data.split(":")[-1])
     user_id = callback.from_user.id
-    lang = get_user_lang(user_id)
-    tb_id = int(callback.data.split(":")[1])
     
-    await tq.skip_time_block(tb_id, user_id)
+    success = await queries.complete_occurrence(task_id, user_id)
     
-    # Перерозподіляємо гнучкі задачі
-    rescheduled = await tq.reschedule_flexible_tasks(user_id)
-    
-    # Оновлюємо розклад
-    schedule = await tq.get_today_schedule(user_id)
-    text = format_today_schedule(schedule, lang)
-    
-    if rescheduled:
-        text += f"\n\n🔄 {t('rescheduled', lang)}: {len(rescheduled)} {t('tasks', lang)}"
-    
-    await callback.message.edit_text(text, reply_markup=get_today_keyboard(schedule, lang))
-    await callback.answer(t("skipped", lang))
-
-
-@router.callback_query(F.data.startswith("tb_unskip:"))
-async def unskip_time_block(callback: CallbackQuery) -> None:
-    user_id = callback.from_user.id
-    lang = get_user_lang(user_id)
-    tb_id = int(callback.data.split(":")[1])
-    
-    await tq.unskip_time_block(tb_id, user_id)
-    
-    schedule = await tq.get_today_schedule(user_id)
-    text = format_today_schedule(schedule, lang)
-    
-    await callback.message.edit_text(text, reply_markup=get_today_keyboard(schedule, lang))
-    await callback.answer(t("restored", lang))
-
-
-# ============== TIME BLOCKS MANAGEMENT ==============
-
-@router.callback_query(F.data == "blocks:manage")
-async def manage_blocks(callback: CallbackQuery) -> None:
-    user_id = callback.from_user.id
-    lang = get_user_lang(user_id)
-    
-    blocks = await tq.get_time_blocks(user_id)
-    
-    if not blocks:
-        text = f"🏢 <b>{t('time_blocks', lang)}</b>\n\n{t('no_blocks', lang)}"
+    if success:
+        await callback.answer("✅ Виконано!", show_alert=True)
+        # Оновлюємо dashboard
+        await callback_refresh(callback)
     else:
-        text = f"🏢 <b>{t('time_blocks', lang)}</b>\n\n"
-        for block in blocks:
-            days = format_days(block['days'], lang)
-            text += f"• {block['title']}\n  {block['start_time']}-{block['end_time']} ({days})\n"
-    
-    builder = InlineKeyboardBuilder()
-    
-    for block in blocks:
-        builder.row(InlineKeyboardButton(
-            text=f"🗑 {block['title']}",
-            callback_data=f"block_delete:{block['id']}"
-        ))
-    
-    builder.row(InlineKeyboardButton(text=f"➕ {t('add_block', lang)}", callback_data="block:add"))
-    builder.row(InlineKeyboardButton(text=t("btn_back", lang), callback_data="today:refresh"))
-    
-    await callback.message.edit_text(text, reply_markup=builder.as_markup())
-    await callback.answer()
+        await callback.answer("❌ Помилка", show_alert=True)
 
 
-def format_days(days_str: str, lang: str) -> str:
-    """Форматує дні для відображення."""
-    day_names = {
-        'uk': {1: 'Пн', 2: 'Вт', 3: 'Ср', 4: 'Чт', 5: 'Пт', 6: 'Сб', 7: 'Нд'},
-        'en': {1: 'Mon', 2: 'Tue', 3: 'Wed', 4: 'Thu', 5: 'Fri', 6: 'Sat', 7: 'Sun'}
-    }
-    names = day_names.get(lang, day_names['uk'])
-    days = [int(d) for d in days_str.split(',') if d.strip().isdigit()]
-    return ', '.join(names.get(d, str(d)) for d in days)
-
-
-# ============== CREATE TIME BLOCK ==============
-
-@router.callback_query(F.data == "block:add")
-async def start_block_creation(callback: CallbackQuery, state: FSMContext) -> None:
+@router.callback_query(F.data.startswith("recurring:skip:"))
+async def callback_recurring_skip(callback: CallbackQuery):
+    """Пропустити recurring task."""
+    task_id = int(callback.data.split(":")[-1])
     user_id = callback.from_user.id
-    lang = get_user_lang(user_id)
     
-    await state.set_state(TimeBlockCreation.title)
-    await state.update_data(lang=lang)
-    await callback.message.answer(t("block_add_title", lang), reply_markup=get_cancel_keyboard(lang))
+    # Отримуємо task для назви
+    task = await queries.get_task_by_id(task_id, user_id)
+    
+    success = await queries.skip_occurrence(task_id, user_id)
+    
+    if success:
+        time_str = ""
+        if task and task.get('scheduled_time'):
+            time_str = f"\nЧас {task['scheduled_time']}"
+            if task.get('scheduled_end'):
+                time_str += f"-{task['scheduled_end']}"
+            time_str += " тепер вільний."
+        
+        await callback.message.edit_text(
+            f"⏭ <b>{task['title'] if task else 'Задачу'}</b> пропущено.{time_str}",
+            parse_mode="HTML",
+            reply_markup=get_recurring_task_actions(task_id, 'skipped')
+        )
+        await callback.answer()
+    else:
+        await callback.answer("❌ Помилка", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("recurring:unskip:"))
+async def callback_recurring_unskip(callback: CallbackQuery):
+    """Повернути пропущену recurring task."""
+    task_id = int(callback.data.split(":")[-1])
+    user_id = callback.from_user.id
+    
+    success = await queries.unskip_occurrence(task_id, user_id)
+    
+    if success:
+        await callback.answer("↩️ Повернуто в розклад")
+        await callback_refresh(callback)
+    else:
+        await callback.answer("❌ Помилка", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("recurring:undone:"))
+async def callback_recurring_undone(callback: CallbackQuery):
+    """Скасувати виконання recurring task."""
+    task_id = int(callback.data.split(":")[-1])
+    user_id = callback.from_user.id
+    
+    # Оновлюємо статус на pending
+    db = await queries.get_db()
+    try:
+        today = date.today().isoformat()
+        await db.execute(
+            """
+            UPDATE task_occurrences 
+            SET status = 'pending', completed_at = NULL
+            WHERE task_id = ? AND date = ?
+            """,
+            (task_id, today)
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    
+    await callback.answer("↩️ Скасовано")
+    await callback_refresh(callback)
+
+
+@router.callback_query(F.data.startswith("recurring:stats:"))
+async def callback_recurring_stats(callback: CallbackQuery):
+    """Статистика recurring task."""
+    task_id = int(callback.data.split(":")[-1])
+    user_id = callback.from_user.id
+    
+    task = await queries.get_task_by_id(task_id, user_id)
+    stats = await queries.get_task_occurrence_stats(task_id)
+    
+    if not task:
+        await callback.answer("❌ Не знайдено", show_alert=True)
+        return
+    
+    text = f"""
+📊 <b>Статистика: {task['title']}</b>
+
+📅 Всього: {stats['total']} разів
+✅ Виконано: {stats['done']} ({stats['success_rate']}%)
+⏭ Пропущено: {stats['skipped']}
+"""
+    
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    builder = InlineKeyboardBuilder()
+    builder.button(text="◀️ Назад", callback_data="today:refresh")
+    
+    await callback.message.edit_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=builder.as_markup()
+    )
     await callback.answer()
 
 
-@router.message(TimeBlockCreation.title)
-async def process_block_title(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    lang = data.get("lang", "uk")
-    
-    if message.text in ["❌ Скасувати", "❌ Cancel"]:
-        await state.clear()
-        await message.answer(t("cancelled", lang), reply_markup=get_main_reply_keyboard(lang))
-        return
-    
-    await state.update_data(title=message.text)
-    await state.set_state(TimeBlockCreation.start_time)
-    await message.answer(t("block_add_start", lang))
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                         MORNING / EVENING                                    ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
 
-
-@router.message(TimeBlockCreation.start_time)
-async def process_block_start(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    lang = data.get("lang", "uk")
-    
-    # Парсимо час
-    import re
-    match = re.match(r'^(\d{1,2})[:\.]?(\d{2})?$', message.text.strip())
-    if not match:
-        await message.answer(t("error_invalid_time", lang))
-        return
-    
-    hour = int(match.group(1))
-    minute = int(match.group(2)) if match.group(2) else 0
-    
-    if not (0 <= hour <= 23 and 0 <= minute <= 59):
-        await message.answer(t("error_invalid_time", lang))
-        return
-    
-    start_time = f"{hour:02d}:{minute:02d}"
-    await state.update_data(start_time=start_time)
-    await state.set_state(TimeBlockCreation.end_time)
-    await message.answer(t("block_add_end", lang))
-
-
-@router.message(TimeBlockCreation.end_time)
-async def process_block_end(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    lang = data.get("lang", "uk")
-    
-    import re
-    match = re.match(r'^(\d{1,2})[:\.]?(\d{2})?$', message.text.strip())
-    if not match:
-        await message.answer(t("error_invalid_time", lang))
-        return
-    
-    hour = int(match.group(1))
-    minute = int(match.group(2)) if match.group(2) else 0
-    
-    if not (0 <= hour <= 23 and 0 <= minute <= 59):
-        await message.answer(t("error_invalid_time", lang))
-        return
-    
-    end_time = f"{hour:02d}:{minute:02d}"
-    await state.update_data(end_time=end_time)
-    await state.set_state(TimeBlockCreation.days)
-    await message.answer(t("block_add_days", lang))
-
-
-@router.message(TimeBlockCreation.days)
-async def process_block_days(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    lang = data.get("lang", "uk")
+@router.message(Command("morning"))
+async def cmd_morning(message: Message):
+    """Ранковий огляд."""
     user_id = message.from_user.id
+    schedule = await queries.get_today_schedule(user_id)
     
-    # Парсимо дні
-    from bot.handlers.goals import parse_schedule_days
-    days = parse_schedule_days(message.text)
+    today = date.today()
+    weekday_name = uk.TODAY['weekdays'][today.weekday()]
     
-    if not days:
-        await message.answer(t("error_invalid_days", lang))
-        return
+    text = f"🌅 <b>Доброго ранку!</b>\n\n"
+    text += f"Сьогодні {weekday_name}, {today.strftime('%d.%m.%Y')}\n\n"
     
-    # Створюємо time block
-    block_id = await tq.create_time_block(
-        user_id=user_id,
-        title=data['title'],
-        start_time=data['start_time'],
-        end_time=data['end_time'],
-        days=days,
-    )
+    # Підсумок
+    total = len(schedule['timeline'])
+    habits_count = sum(1 for i in schedule['timeline'] if i['type'] == 'habit')
+    tasks_count = sum(1 for i in schedule['timeline'] if i['type'] in ('task', 'recurring_task'))
     
-    await state.clear()
+    text += f"📋 Задач: {tasks_count}\n"
+    text += f"✅ Звичок: {habits_count}\n\n"
+    
+    # Перші 5 елементів з часом
+    with_time = [i for i in schedule['timeline'] if i.get('time')][:5]
+    if with_time:
+        text += "<b>Найближче:</b>\n"
+        for item in with_time:
+            text += f"  {item.get('time', '')} {item.get('title', '')}\n"
+    
+    text += "\n💪 Гарного продуктивного дня!"
+    
+    from bot.keyboards.today import get_morning_keyboard
     await message.answer(
-        t("block_created", lang, title=data['title']),
-        reply_markup=get_main_reply_keyboard(lang)
+        text,
+        parse_mode="HTML",
+        reply_markup=get_morning_keyboard()
     )
 
 
-@router.callback_query(F.data.startswith("block_delete:"))
-async def delete_block(callback: CallbackQuery) -> None:
-    user_id = callback.from_user.id
-    lang = get_user_lang(user_id)
-    block_id = int(callback.data.split(":")[1])
+@router.message(Command("evening"))
+async def cmd_evening(message: Message):
+    """Вечірній підсумок."""
+    user_id = message.from_user.id
+    schedule = await queries.get_today_schedule(user_id)
     
-    await tq.delete_time_block(block_id, user_id)
+    done, total = _calculate_progress(schedule)
+    percent = int(done / total * 100) if total > 0 else 0
     
-    # Оновлюємо список
-    blocks = await tq.get_time_blocks(user_id)
+    text = f"🌙 <b>Підсумок дня</b>\n\n"
+    text += f"📊 Виконано: {done}/{total} ({percent}%)\n\n"
     
-    if not blocks:
-        text = f"🏢 <b>{t('time_blocks', lang)}</b>\n\n{t('no_blocks', lang)}"
+    # Виконані
+    completed = []
+    pending = []
+    
+    for item in schedule['timeline']:
+        is_done = False
+        if item['type'] == 'habit' and item.get('today_status') == 'done':
+            is_done = True
+        elif item['type'] == 'recurring_task' and item.get('occurrence', {}).get('status') == 'done':
+            is_done = True
+        
+        if is_done:
+            completed.append(item)
+        else:
+            pending.append(item)
+    
+    if completed:
+        text += "<b>✅ Виконано:</b>\n"
+        for item in completed[:5]:
+            streak = f" 🔥{item['streak']}" if item.get('streak') else ""
+            text += f"  • {item.get('title', '')}{streak}\n"
+        if len(completed) > 5:
+            text += f"  <i>...і ще {len(completed) - 5}</i>\n"
+        text += "\n"
+    
+    if pending:
+        text += "<b>❌ Не виконано:</b>\n"
+        for item in pending[:3]:
+            text += f"  • {item.get('title', '')}\n"
+    
+    if percent >= 80:
+        text += "\n🎉 Відмінний день!"
+    elif percent >= 50:
+        text += "\n👍 Непогано!"
     else:
-        text = f"🏢 <b>{t('time_blocks', lang)}</b>\n\n"
-        for block in blocks:
-            days = format_days(block['days'], lang)
-            text += f"• {block['title']}\n  {block['start_time']}-{block['end_time']} ({days})\n"
+        text += "\n💪 Завтра буде краще!"
     
-    builder = InlineKeyboardBuilder()
-    for block in blocks:
-        builder.row(InlineKeyboardButton(text=f"🗑 {block['title']}", callback_data=f"block_delete:{block['id']}"))
-    builder.row(InlineKeyboardButton(text=f"➕ {t('add_block', lang)}", callback_data="block:add"))
-    builder.row(InlineKeyboardButton(text=t("btn_back", lang), callback_data="today:refresh"))
-    
-    await callback.message.edit_text(text, reply_markup=builder.as_markup())
-    await callback.answer(t("deleted", lang))
+    from bot.keyboards.today import get_evening_keyboard
+    await message.answer(
+        text,
+        parse_mode="HTML",
+        reply_markup=get_evening_keyboard()
+    )
 
 
-# ============== HABITS TODAY (redirect) ==============
-
-@router.callback_query(F.data == "habits:today")
-async def habits_today_redirect(callback: CallbackQuery) -> None:
-    """Перенаправлення на /habits."""
-    user_id = callback.from_user.id
-    lang = get_user_lang(user_id)
-    
-    habits = await gq.get_habits_today(user_id)
-    
-    from bot.handlers.goals import get_habits_today_keyboard
-    from bot.keyboards.goals import get_habits_today_keyboard
-    
-    today_str = date.today().strftime("%d.%m.%Y")
-    
-    if not habits:
-        text = f"✅ <b>{t('habits_title', lang)}</b> ({today_str})\n\n{t('habits_empty', lang)}"
-    else:
-        done = sum(1 for h in habits if h.get('today_status') == 'done')
-        text = f"✅ <b>{t('habits_title', lang)}</b> ({today_str})\n\n"
-        text += t('habits_progress', lang, done=done, total=len(habits), percent=int(done/len(habits)*100) if habits else 0)
-    
-    await callback.message.edit_text(text, reply_markup=get_habits_today_keyboard(habits, lang))
+@router.callback_query(F.data == "today:start_day")
+async def callback_start_day(callback: CallbackQuery):
+    """Кнопка 'Почати день'."""
+    await cmd_today(callback.message)
     await callback.answer()

@@ -1,84 +1,52 @@
 """
-Модуль локалізації (i18n).
-
-Використання:
-    from bot.locales import t, get_user_lang, set_user_lang
-    
-    lang = get_user_lang(user_id)
-    text = t("welcome", lang)
-    text = t("task_done", lang, task_id=5)
+Система локалізації.
+LifeHub Bot v4.0
 """
 
-from typing import Optional
+from bot.locales import uk
 
-# Імпортуємо словники перекладів
-from bot.locales import uk, en, ru, de
-
+# Словник доступних мов
 LANGUAGES = {
-    'uk': uk.TEXTS,
-    'en': en.TEXTS,
-    'ru': ru.TEXTS,
-    'de': de.TEXTS,
+    'uk': uk,
+    # 'en': en,  # Додати пізніше
 }
 
-DEFAULT_LANG = 'en'
-
-# Кеш мов користувачів (user_id -> lang)
-_user_languages: dict[int, str] = {}
+DEFAULT_LANGUAGE = 'uk'
 
 
-def t(key: str, lang: str = DEFAULT_LANG, **kwargs) -> str:
+def get_locale(lang: str = None):
+    """Отримати модуль локалізації за кодом мови."""
+    return LANGUAGES.get(lang or DEFAULT_LANGUAGE, uk)
+
+
+def get_text(key: str, lang: str = None, **kwargs) -> str:
     """
-    Отримати переклад за ключем.
+    Отримати текст за ключем.
     
-    Args:
-        key: Ключ перекладу (наприклад, "task_created")
-        lang: Код мови (uk, en, ru, de)
-        **kwargs: Змінні для підстановки
-    
-    Returns:
-        Перекладений текст
-    
-    Приклади:
-        t("welcome", "uk")
-        t("task_done", "uk", task_id=5)
+    Приклад:
+        get_text('TASKS.empty', 'uk')
+        get_text('HABITS.marked_done', 'uk', title='Медитація', streak=5)
     """
-    texts = LANGUAGES.get(lang, LANGUAGES[DEFAULT_LANG])
-    text = texts.get(key)
+    locale = get_locale(lang)
     
-    # Fallback на англійську якщо ключ не знайдено
-    if text is None:
-        text = LANGUAGES[DEFAULT_LANG].get(key, f"[{key}]")
+    # Розбираємо ключ (наприклад, 'TASKS.empty')
+    parts = key.split('.')
     
     try:
-        return text.format(**kwargs) if kwargs else text
-    except KeyError as e:
-        # Якщо не вистачає змінної — повертаємо текст як є
-        return text
+        value = getattr(locale, parts[0])
+        for part in parts[1:]:
+            if isinstance(value, dict):
+                value = value[part]
+            else:
+                value = getattr(value, part)
+        
+        # Форматуємо якщо є kwargs
+        if kwargs and isinstance(value, str):
+            return value.format(**kwargs)
+        return value
+    except (KeyError, AttributeError):
+        return f"[{key}]"
 
 
-def get_user_lang(user_id: int) -> str:
-    """Отримати мову користувача з кешу."""
-    return _user_languages.get(user_id, DEFAULT_LANG)
-
-
-def set_user_lang(user_id: int, lang: str) -> None:
-    """Встановити мову користувача в кеш."""
-    if lang in LANGUAGES:
-        _user_languages[user_id] = lang
-
-
-def get_available_languages() -> list[str]:
-    """Список доступних мов."""
-    return list(LANGUAGES.keys())
-
-
-def get_language_name(lang_code: str) -> str:
-    """Назва мови за кодом."""
-    names = {
-        'uk': '🇺🇦 Українська',
-        'en': '🇬🇧 English',
-        'ru': '🇷🇺 Русский',
-        'de': '🇩🇪 Deutsch',
-    }
-    return names.get(lang_code, lang_code)
+# Короткий alias
+_ = get_text
