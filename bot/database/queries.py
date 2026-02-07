@@ -2,13 +2,16 @@
 SQL запити для роботи з даними.
 LifeHub Bot v4.0
 
-Єдиний файл для всіх запитів:
+ЄДИНИЙ ФАЙЛ для всіх запитів:
 - User settings
 - Tasks (one-time + recurring)
 - Task occurrences
 - Goals (project, habit, target, metric)
 - Habit logs
 - Goal entries
+- Today schedule
+
+ВАЖЛИВО: Не створювати окремих файлів queries!
 """
 
 import json
@@ -45,7 +48,6 @@ async def upsert_user_settings(user_id: int, **kwargs) -> None:
     """Створити або оновити налаштування."""
     db = await get_db()
     try:
-        # Спочатку спробуємо вставити
         existing = await get_user_settings(user_id)
         
         if existing:
@@ -136,8 +138,8 @@ async def get_tasks_today(user_id: int) -> List[Dict[str, Any]]:
     Отримати задачі на сьогодні:
     1. One-time з deadline = today
     2. One-time з deadline < today (прострочені)
-    3. НЕ включає задачі без дедлайну (вони в Inbox)
-    4. НЕ включає recurring (вони окремо)
+    3. НЕ включає: задачі без дедлайну (Inbox)
+    4. НЕ включає: recurring (окрема логіка)
     """
     today = date.today().isoformat()
     
@@ -231,6 +233,14 @@ async def complete_task(task_id: int, user_id: int) -> bool:
     """Позначити one-time задачу виконаною."""
     db = await get_db()
     try:
+        # Спочатку отримаємо task для перевірки goal_id
+        cursor = await db.execute(
+            "SELECT goal_id FROM tasks WHERE id = ? AND user_id = ?",
+            (task_id, user_id)
+        )
+        task_row = await cursor.fetchone()
+        goal_id = task_row['goal_id'] if task_row else None
+        
         cursor = await db.execute(
             """
             UPDATE tasks 
@@ -240,13 +250,13 @@ async def complete_task(task_id: int, user_id: int) -> bool:
             (datetime.now().isoformat(), task_id, user_id)
         )
         await db.commit()
+        success = cursor.rowcount > 0
         
         # Перерахувати прогрес проєкту якщо є
-        task = await get_task_by_id(task_id, user_id)
-        if task and task.get('goal_id'):
-            await recalculate_project_progress(task['goal_id'], user_id)
+        if success and goal_id:
+            await recalculate_project_progress(goal_id, user_id)
         
-        return cursor.rowcount > 0
+        return success
     finally:
         await db.close()
 
@@ -346,7 +356,7 @@ async def get_recurring_tasks_for_weekday(user_id: int, weekday: int) -> List[Di
                   OR (t.recurrence_rule = 'weekdays' AND ? BETWEEN 1 AND 5)
                   OR (t.recurrence_rule = 'custom' AND t.recurrence_days LIKE '%' || ? || '%')
               )
-            ORDER BY t.scheduled_time ASC
+            ORDER BY t.is_fixed DESC, t.scheduled_time ASC
             """,
             (user_id, weekday, str(weekday))
         )
@@ -381,7 +391,6 @@ async def get_or_create_occurrence(task_id: int, user_id: int, for_date: date = 
             return dict(row)
         
         # Створюємо новий
-        # Рахуємо номер входження
         cursor = await db.execute(
             "SELECT COUNT(*) FROM task_occurrences WHERE task_id = ?",
             (task_id,)
@@ -669,6 +678,14 @@ async def complete_goal(goal_id: int, user_id: int) -> bool:
     """Завершити ціль."""
     db = await get_db()
     try:
+        # Отримаємо parent_id перед оновленням
+        cursor = await db.execute(
+            "SELECT parent_id FROM goals WHERE id = ? AND user_id = ?",
+            (goal_id, user_id)
+        )
+        row = await cursor.fetchone()
+        parent_id = row['parent_id'] if row else None
+        
         cursor = await db.execute(
             """
             UPDATE goals 
@@ -678,13 +695,13 @@ async def complete_goal(goal_id: int, user_id: int) -> bool:
             (datetime.now().isoformat(), goal_id, user_id)
         )
         await db.commit()
+        success = cursor.rowcount > 0
         
         # Перерахувати прогрес батьківського проєкту
-        goal = await get_goal_by_id(goal_id, user_id)
-        if goal and goal.get('parent_id'):
-            await recalculate_project_progress(goal['parent_id'], user_id)
+        if success and parent_id:
+            await recalculate_project_progress(parent_id, user_id)
         
-        return cursor.rowcount > 0
+        return success
     finally:
         await db.close()
 
@@ -728,8 +745,14 @@ async def delete_goal(goal_id: int, user_id: int) -> bool:
 async def recalculate_project_progress(project_id: int, user_id: int) -> int:
     """
     Перераховує прогрес Project на основі:
-    1. Дочірніх цілей (habit, target, metric)
-    2. Прив'язаних задач
+    1. Дочірніх цілей (habit, target, metric, sub-project)
+    2. Пов'язаних задач (goal_id = project_id)
+    
+    Викликається при:
+    - complete_task() якщо task.goal_id != None
+    - complete_goal() якщо goal.parent_id != None
+    - log_habit() якщо habit.parent_id != None
+    - add_goal_entry() для target/metric в проєкті
     """
     db = await get_db()
     try:
@@ -743,7 +766,7 @@ async def recalculate_project_progress(project_id: int, user_id: int) -> int:
         )
         children = await cursor.fetchall()
         
-        # Пов'язані задачі
+        # Пов'язані задачі (тільки one-time)
         cursor = await db.execute(
             """
             SELECT is_completed FROM tasks 
@@ -776,6 +799,15 @@ async def recalculate_project_progress(project_id: int, user_id: int) -> int:
             (avg_progress, project_id)
         )
         await db.commit()
+        
+        # Якщо цей проєкт сам є дочірнім — оновити батька
+        cursor = await db.execute(
+            "SELECT parent_id FROM goals WHERE id = ?",
+            (project_id,)
+        )
+        row = await cursor.fetchone()
+        if row and row['parent_id']:
+            await recalculate_project_progress(row['parent_id'], user_id)
         
         return avg_progress
     finally:
@@ -846,7 +878,12 @@ async def log_habit(goal_id: int, user_id: int, status: str, notes: str = None) 
 async def _update_habit_streak(goal_id: int, user_id: int) -> None:
     """
     ВИПРАВЛЕНИЙ алгоритм розрахунку streak.
-    Streak обривається якщо є gap (день без логу).
+    
+    Правила:
+    1. Починаємо з сьогодні
+    2. Йдемо назад по днях
+    3. Якщо є лог 'done' або 'skipped' — streak++
+    4. Якщо є лог 'missed' АБО немає логу — СТОП (streak обривається)
     """
     db = await get_db()
     try:
@@ -878,14 +915,14 @@ async def _update_habit_streak(goal_id: int, user_id: int) -> None:
             log_date = date.fromisoformat(log['date'])
             
             if log_date == check_date:
-                # Дата співпадає
+                # Дата співпадає — перевіряємо статус
                 if log['status'] in ('done', 'skipped'):
                     current_streak += 1
                     check_date -= timedelta(days=1)
                 else:  # missed
                     break
             elif log_date < check_date:
-                # Gap — є пропущені дні без логу
+                # GAP — є пропущені дні без логу = streak обривається
                 break
             # Якщо log_date > check_date — ігноруємо (майбутні дати)
         
@@ -951,7 +988,7 @@ async def get_habit_stats(goal_id: int, user_id: int) -> Dict[str, Any]:
         )
         month = await cursor.fetchone()
         
-        # Всього
+        # Всього виконано
         cursor = await db.execute(
             """
             SELECT COUNT(*) as total
@@ -1135,10 +1172,14 @@ async def get_goals_stats(user_id: int) -> Dict[str, Any]:
 async def get_today_schedule(user_id: int) -> Dict[str, Any]:
     """
     Повний розклад на сьогодні:
-    - recurring_tasks (з occurrences)
+    - recurring_tasks (з occurrences) — включаючи is_fixed (школа, робота)
     - one_time_tasks
-    - habits
+    - habits (окремо від recurring!)
     - timeline (все з часом, відсортоване)
+    
+    ВАЖЛИВО: Recurring tasks ≠ Habits!
+    - Recurring: is_fixed=1 для фіксованого часу, статистика, БЕЗ streak
+    - Habits: streak tracking, мотивація безперервністю
     """
     today = date.today()
     weekday = today.isoweekday()
@@ -1152,7 +1193,7 @@ async def get_today_schedule(user_id: int) -> Dict[str, Any]:
         'timeline': []
     }
     
-    # 1. Recurring tasks
+    # 1. Recurring tasks (включаючи is_fixed — школа, робота)
     recurring = await get_recurring_tasks_for_weekday(user_id, weekday)
     for task in recurring:
         occ = await get_or_create_occurrence(task['id'], user_id, today)
@@ -1164,52 +1205,56 @@ async def get_today_schedule(user_id: int) -> Dict[str, Any]:
     # 2. One-time tasks
     schedule['one_time_tasks'] = await get_tasks_today(user_id)
     
-    # 3. Habits
+    # 3. Habits (ОКРЕМО від recurring!)
     schedule['habits'] = await get_habits_today(user_id)
     
     # 4. Build timeline
     timeline = []
     
-    # Recurring (не skipped)
+    # Recurring tasks (не skipped)
     for item in schedule['recurring_tasks']:
-        if item['occurrence']['status'] != 'skipped' and item.get('scheduled_time'):
+        if item['occurrence']['status'] != 'skipped':
             timeline.append({
                 'type': 'recurring_task',
                 'id': item['id'],
                 'title': item['title'],
-                'time': item['scheduled_time'],
+                'time': item.get('scheduled_time'),
                 'end_time': item.get('scheduled_end'),
                 'occurrence': item['occurrence'],
-                'is_fixed': item['is_fixed'],
+                'is_fixed': item.get('is_fixed', 0),
+                'goal_id': item.get('goal_id'),
+                'goal_title': item.get('goal_title'),
             })
     
-    # One-time tasks з часом
+    # One-time tasks
     for task in schedule['one_time_tasks']:
-        if task.get('scheduled_time'):
-            timeline.append({
-                'type': 'task',
-                'id': task['id'],
-                'title': task['title'],
-                'time': task['scheduled_time'],
-                'priority': task['priority'],
-                'goal_title': task.get('goal_title'),
-            })
+        timeline.append({
+            'type': 'task',
+            'id': task['id'],
+            'title': task['title'],
+            'time': task.get('scheduled_time'),
+            'priority': task.get('priority', 2),
+            'goal_id': task.get('goal_id'),
+            'goal_title': task.get('goal_title'),
+            'deadline': task.get('deadline'),
+            'is_completed': task.get('is_completed', 0),
+        })
     
-    # Habits з часом
+    # Habits (з часом)
     for habit in schedule['habits']:
-        if habit.get('reminder_time'):
-            timeline.append({
-                'type': 'habit',
-                'id': habit['id'],
-                'title': habit['title'],
-                'time': habit['reminder_time'],
-                'duration': habit.get('duration_minutes'),
-                'streak': habit.get('current_streak', 0),
-                'today_status': habit.get('today_status'),
-            })
+        timeline.append({
+            'type': 'habit',
+            'id': habit['id'],
+            'title': habit['title'],
+            'time': habit.get('reminder_time'),
+            'duration': habit.get('duration_minutes'),
+            'streak': habit.get('current_streak', 0),
+            'today_status': habit.get('today_status'),
+            'parent_id': habit.get('parent_id'),
+        })
     
-    # Сортуємо по часу
-    timeline.sort(key=lambda x: x.get('time', '99:99'))
+    # Сортуємо по часу (елементи без часу — в кінці)
+    timeline.sort(key=lambda x: x.get('time') or '99:99')
     schedule['timeline'] = timeline
     
     return schedule

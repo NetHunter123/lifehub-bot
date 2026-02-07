@@ -1,8 +1,14 @@
-"""Russian translations (placeholder)."""
+"""
+Russian localization (stub).
+LifeHub Bot v4.0
 
-# Поки використовуємо англійську, пізніше перекладемо
-from bot.locales.en import TEXTS as EN_TEXTS
+TODO: Translate from uk.py
+"""
 
-TEXTS = EN_TEXTS.copy()
+# For now, import everything from Ukrainian
+from bot.locales.uk import *
 
-# TODO: Перекласти російською
+# Override with Russian when ready:
+# WELCOME = "..."
+# HELP = "..."
+# etc.

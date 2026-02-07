@@ -100,10 +100,7 @@ def get_weekdays_keyboard(selected: List[int] = None) -> InlineKeyboardMarkup:
     
     for name, num in days:
         mark = "✅" if num in selected else "⬜"
-        builder.button(
-            text=f"{mark} {name}",
-            callback_data=f"habit:day:{num}"
-        )
+        builder.button(text=f"{mark} {name}", callback_data=f"habit:day:{num}")
     
     builder.button(text="✅ Готово", callback_data="habit:days:done")
     

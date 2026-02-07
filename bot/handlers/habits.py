@@ -1,6 +1,14 @@
 """
 Обробники звичок.
 LifeHub Bot v4.0
+
+ВАЖЛИВО: Habits ≠ Recurring Tasks!
+- Habit: streak tracking, мотивація безперервністю
+- Recurring Task: статистика виконання, БЕЗ streak
+
+Streak правила:
+- 'done' або 'skipped' — streak зберігається
+- Пропуск без логу — streak = 0
 """
 
 from datetime import date
@@ -30,46 +38,41 @@ async def cmd_habits(message: Message):
     habits = await queries.get_habits_today(user_id)
     
     if not habits:
-        text = f"{uk.HABITS['title_today']}\n\n{uk.HABITS['empty']}"
-        await message.answer(text, parse_mode="HTML")
+        await message.answer(
+            f"{uk.HABITS['title_today']}\n\n{uk.HABITS['empty']}",
+            parse_mode="HTML"
+        )
         return
     
-    # Форматуємо список
     today = date.today()
-    weekday_name = uk.TODAY['weekdays'][today.weekday()]
+    weekday = uk.TODAY['weekdays'][today.isoweekday() - 1]
     
-    text = f"✅ <b>Звички на сьогодні</b> ({weekday_name})\n\n"
+    text = f"{uk.HABITS['title_today']} ({weekday})\n\n"
     
     done_count = 0
+    
     for habit in habits:
-        # Статус
+        # Визначаємо статус
         today_status = habit.get('today_status')
         if today_status == 'done':
             status = "✅"
             done_count += 1
         elif today_status == 'skipped':
             status = "⏭"
-            done_count += 1  # skipped теж рахується як "виконано" для прогресу
+            done_count += 1  # skipped теж рахується як "зроблено"
         else:
             status = "⬜"
         
-        # Streak
         streak = habit.get('current_streak', 0)
         streak_text = f" 🔥{streak}" if streak > 0 else ""
         
-        # Час
         time_text = ""
         if habit.get('reminder_time'):
             time_text = f" {habit['reminder_time']}"
         
-        # Тривалість
-        duration_text = ""
-        if habit.get('duration_minutes'):
-            duration_text = f" ({habit['duration_minutes']} хв)"
-        
-        text += f"{status}{time_text} {habit['title']}{duration_text}{streak_text}\n"
+        text += f"{status}{time_text} {habit['title']}{streak_text}\n"
     
-    text += f"\n📊 Прогрес: {done_count}/{len(habits)} ({int(done_count/len(habits)*100)}%)"
+    text += f"\n📊 Прогрес: {done_count}/{len(habits)}"
     
     await message.answer(
         text,
@@ -115,31 +118,29 @@ async def habit_title(message: Message, state: FSMContext):
 @router.callback_query(HabitCreation.frequency, F.data.startswith("habit:freq:"))
 async def habit_frequency(callback: CallbackQuery, state: FSMContext):
     """Отримуємо частоту."""
-    freq = callback.data.replace("habit:freq:", "")
+    frequency = callback.data.replace("habit:freq:", "")
     
-    if freq == "custom":
+    if frequency == "custom":
         await state.update_data(frequency="custom", selected_days=[])
         await state.set_state(HabitCreation.schedule_days)
         await callback.message.edit_text(
             uk.HABITS['create_days'],
             reply_markup=kb.get_weekdays_keyboard([])
         )
-        await callback.answer()
-        return
+    else:
+        await state.update_data(frequency=frequency)
+        await state.set_state(HabitCreation.reminder_time)
+        await callback.message.edit_text(
+            uk.HABITS['create_time'],
+            reply_markup=kb.get_time_keyboard()
+        )
     
-    await state.update_data(frequency=freq)
-    await state.set_state(HabitCreation.reminder_time)
-    
-    await callback.message.edit_text(
-        uk.HABITS['create_time'],
-        reply_markup=kb.get_time_keyboard()
-    )
     await callback.answer()
 
 
 @router.callback_query(HabitCreation.schedule_days, F.data.startswith("habit:day:"))
-async def habit_select_day(callback: CallbackQuery, state: FSMContext):
-    """Вибір дня тижня."""
+async def habit_day_toggle(callback: CallbackQuery, state: FSMContext):
+    """Перемикання дня тижня."""
     day = int(callback.data.replace("habit:day:", ""))
     data = await state.get_data()
     selected = data.get('selected_days', [])
@@ -168,8 +169,8 @@ async def habit_days_done(callback: CallbackQuery, state: FSMContext):
     
     schedule_days = ",".join(str(d) for d in sorted(selected))
     await state.update_data(schedule_days=schedule_days)
-    await state.set_state(HabitCreation.reminder_time)
     
+    await state.set_state(HabitCreation.reminder_time)
     await callback.message.edit_text(
         uk.HABITS['create_time'],
         reply_markup=kb.get_time_keyboard()
@@ -190,8 +191,8 @@ async def habit_time(callback: CallbackQuery, state: FSMContext):
     
     reminder_time = None if time_value == "none" else time_value
     await state.update_data(reminder_time=reminder_time)
-    await state.set_state(HabitCreation.duration)
     
+    await state.set_state(HabitCreation.duration)
     await callback.message.edit_text(
         uk.HABITS['create_duration'],
         reply_markup=kb.get_duration_keyboard()
@@ -201,7 +202,7 @@ async def habit_time(callback: CallbackQuery, state: FSMContext):
 
 @router.message(HabitCreation.time_custom)
 async def habit_time_custom(message: Message, state: FSMContext):
-    """Кастомний час."""
+    """Отримуємо кастомний час."""
     text = message.text.strip()
     
     try:
@@ -212,7 +213,7 @@ async def habit_time_custom(message: Message, state: FSMContext):
             raise ValueError
         reminder_time = f"{int(hours):02d}:{int(minutes):02d}"
     except ValueError:
-        await message.answer("❌ Невірний формат. Введи час як ГГ:ХХ")
+        await message.answer(uk.ERRORS['invalid_time'])
         return
     
     await state.update_data(reminder_time=reminder_time)
@@ -229,8 +230,8 @@ async def habit_duration(callback: CallbackQuery, state: FSMContext):
     """Отримуємо тривалість."""
     duration_value = callback.data.replace("habit:duration:", "")
     
-    duration_minutes = None if duration_value == "none" else int(duration_value)
-    await state.update_data(duration_minutes=duration_minutes)
+    duration = None if duration_value == "none" else int(duration_value)
+    await state.update_data(duration_minutes=duration)
     
     # Перевіряємо чи є проєкти
     user_id = callback.from_user.id
@@ -244,7 +245,6 @@ async def habit_duration(callback: CallbackQuery, state: FSMContext):
             reply_markup=get_parent_keyboard(projects)
         )
     else:
-        # Одразу створюємо
         await _create_habit(callback, state)
     
     await callback.answer()
@@ -279,11 +279,10 @@ async def _create_habit(callback: CallbackQuery, state: FSMContext):
     
     await state.clear()
     
-    # Форматуємо відповідь
     freq_labels = {
         'daily': 'Щодня',
-        'weekdays': 'По буднях (Пн-Пт)',
-        'custom': data.get('schedule_days', '')
+        'weekdays': 'По буднях',
+        'custom': 'Обрані дні'
     }
     
     parent_str = "Без проєкту"
@@ -294,9 +293,9 @@ async def _create_habit(callback: CallbackQuery, state: FSMContext):
     
     text = uk.HABITS['create_confirm'].format(
         title=data['title'],
-        frequency=freq_labels.get(data.get('frequency', 'daily'), 'Щодня'),
+        frequency=freq_labels.get(data.get('frequency', 'daily'), data.get('frequency')),
         time=data.get('reminder_time') or 'Без часу',
-        duration=data.get('duration_minutes') or '-',
+        duration=data.get('duration_minutes') or '—',
         parent=parent_str
     )
     
@@ -329,41 +328,76 @@ async def callback_habits_today(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("habit:view:"))
+async def callback_habit_view(callback: CallbackQuery):
+    """Переглянути деталі звички."""
+    habit_id = int(callback.data.split(":")[-1])
+    user_id = callback.from_user.id
+    
+    habit = await queries.get_goal_by_id(habit_id, user_id)
+    
+    if not habit or habit['goal_type'] != 'habit':
+        await callback.answer("❌ Звичку не знайдено", show_alert=True)
+        return
+    
+    freq_labels = {
+        'daily': 'Щодня',
+        'weekdays': 'По буднях (Пн-Пт)',
+        'custom': 'Обрані дні'
+    }
+    
+    text = f"""
+✅ <b>{habit['title']}</b>
+
+🔥 Поточна серія: <b>{habit.get('current_streak', 0)}</b> днів
+🏆 Найдовша: <b>{habit.get('longest_streak', 0)}</b> днів
+
+📅 Частота: {freq_labels.get(habit.get('frequency'), habit.get('frequency'))}
+⏰ Час: {habit.get('reminder_time') or 'Не вказано'}
+⏱ Тривалість: {habit.get('duration_minutes') or '—'} хв
+"""
+    
+    await callback.message.edit_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=kb.get_habit_actions(habit_id)
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("habit:done:"))
 async def callback_habit_done(callback: CallbackQuery):
     """Позначити звичку виконаною."""
     habit_id = int(callback.data.split(":")[-1])
     user_id = callback.from_user.id
     
-    await queries.log_habit(habit_id, user_id, status='done')
+    await queries.log_habit(habit_id, user_id, 'done')
     
     habit = await queries.get_goal_by_id(habit_id, user_id)
     streak = habit.get('current_streak', 0) if habit else 0
+    title = habit['title'] if habit else ''
     
     await callback.answer(
-        uk.HABITS['marked_done'].format(
-            title=habit['title'] if habit else '',
-            streak=streak
-        ),
+        uk.HABITS['marked_done'].format(title=title, streak=streak),
         show_alert=True
     )
     
-    # Оновлюємо список
     await cmd_habits(callback.message)
 
 
 @router.callback_query(F.data.startswith("habit:skip:"))
 async def callback_habit_skip(callback: CallbackQuery):
-    """Пропустити звичку (без обриву streak)."""
+    """Пропустити звичку (streak зберігається)."""
     habit_id = int(callback.data.split(":")[-1])
     user_id = callback.from_user.id
     
-    await queries.log_habit(habit_id, user_id, status='skipped')
+    await queries.log_habit(habit_id, user_id, 'skipped')
     
     habit = await queries.get_goal_by_id(habit_id, user_id)
+    title = habit['title'] if habit else ''
     
     await callback.answer(
-        uk.HABITS['marked_skip'].format(title=habit['title'] if habit else ''),
+        uk.HABITS['marked_skip'].format(title=title),
         show_alert=True
     )
     
@@ -381,59 +415,36 @@ async def callback_habit_undone(callback: CallbackQuery):
     try:
         today = date.today().isoformat()
         await db.execute(
-            "DELETE FROM habit_logs WHERE goal_id = ? AND date = ?",
-            (habit_id, today)
+            "DELETE FROM habit_logs WHERE goal_id = ? AND user_id = ? AND date = ?",
+            (habit_id, user_id, today)
         )
         await db.commit()
     finally:
         await db.close()
     
-    # Перераховуємо streak
-    await queries._update_habit_streak(habit_id, user_id)
-    
-    await callback.answer("↩️ Звичку повернуто")
+    await callback.answer("↩️ Скасовано")
     await cmd_habits(callback.message)
 
 
-@router.callback_query(F.data.startswith("habit:view:"))
-async def callback_habit_view(callback: CallbackQuery):
-    """Переглянути деталі звички."""
-    habit_id = int(callback.data.split(":")[-1])
+@router.callback_query(F.data == "habit:all_done")
+async def callback_habit_all_done(callback: CallbackQuery):
+    """Позначити всі звички виконаними."""
     user_id = callback.from_user.id
+    habits = await queries.get_habits_today(user_id)
     
-    habit = await queries.get_goal_by_id(habit_id, user_id)
+    count = 0
+    for habit in habits:
+        if habit.get('today_status') not in ('done', 'skipped'):
+            await queries.log_habit(habit['id'], user_id, 'done')
+            count += 1
     
-    if not habit:
-        await callback.answer("❌ Звичку не знайдено", show_alert=True)
-        return
-    
-    freq_labels = {
-        'daily': 'Щодня',
-        'weekdays': 'По буднях (Пн-Пт)',
-        'custom': habit.get('schedule_days', '')
-    }
-    
-    text = f"""
-✅ <b>{habit['title']}</b>
-
-🔥 Поточна серія: <b>{habit.get('current_streak', 0)}</b> днів
-🏆 Рекорд: <b>{habit.get('longest_streak', 0)}</b> днів
-📅 Частота: {freq_labels.get(habit.get('frequency'), 'Щодня')}
-⏰ Час: {habit.get('reminder_time') or 'Не вказано'}
-⏱ Тривалість: {habit.get('duration_minutes') or '-'} хв
-"""
-    
-    await callback.message.edit_text(
-        text,
-        parse_mode="HTML",
-        reply_markup=kb.get_habit_actions(habit_id)
-    )
-    await callback.answer()
+    await callback.answer(f"✅ Позначено {count} звичок")
+    await cmd_habits(callback.message)
 
 
 @router.callback_query(F.data.startswith("habit:stats:"))
 async def callback_habit_stats(callback: CallbackQuery):
-    """Статистика звички."""
+    """Показати статистику звички."""
     habit_id = int(callback.data.split(":")[-1])
     user_id = callback.from_user.id
     
@@ -448,10 +459,10 @@ async def callback_habit_stats(callback: CallbackQuery):
         title=habit['title'],
         current_streak=habit.get('current_streak', 0),
         longest_streak=habit.get('longest_streak', 0),
-        month_done=stats['month_done'],
-        month_total=stats['month_total'],
-        month_rate=stats['month_rate'],
-        total_done=stats['total_done']
+        month_done=stats.get('month_done', 0),
+        month_total=stats.get('month_total', 0),
+        month_rate=stats.get('month_rate', 0),
+        total_done=stats.get('total_done', 0)
     )
     
     await callback.message.edit_text(
@@ -468,7 +479,7 @@ async def callback_habit_delete(callback: CallbackQuery):
     habit_id = int(callback.data.split(":")[-1])
     
     await callback.message.edit_text(
-        "🗑 <b>Видалити звичку?</b>\n\nВся статистика буде втрачена.",
+        "🗑 <b>Видалити звичку?</b>\n\nСерія буде втрачена назавжди!",
         parse_mode="HTML",
         reply_markup=kb.get_delete_confirm(habit_id)
     )
@@ -490,17 +501,9 @@ async def callback_habit_delete_confirm(callback: CallbackQuery):
         await callback.answer("❌ Помилка", show_alert=True)
 
 
-@router.callback_query(F.data == "habit:all_done")
-async def callback_all_habits_done(callback: CallbackQuery):
-    """Позначити всі звички виконаними."""
-    user_id = callback.from_user.id
-    habits = await queries.get_habits_today(user_id)
-    
-    count = 0
-    for habit in habits:
-        if habit.get('today_status') not in ('done', 'skipped'):
-            await queries.log_habit(habit['id'], user_id, status='done')
-            count += 1
-    
-    await callback.answer(f"✅ Виконано {count} звичок!", show_alert=True)
-    await cmd_habits(callback.message)
+@router.callback_query(F.data == "habit:cancel")
+async def callback_habit_cancel(callback: CallbackQuery, state: FSMContext):
+    """Скасування створення."""
+    await state.clear()
+    await callback.message.edit_text(uk.CANCELLED)
+    await callback.answer()

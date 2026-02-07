@@ -1,20 +1,24 @@
 """
-LifeHub Bot — Entry Point.
-Version 4.0
+LifeHub Bot v4.0
+Telegram бот для управління задачами, цілями та звичками.
 
-Запуск: python -m bot.main
+Архітектура:
+- Tasks: one-time + recurring (is_fixed для фіксованого часу)
+- Goals: project, target, metric (БЕЗ task!)
+- Habits: окремо від recurring tasks (streak tracking)
+
+Запуск:
+    python -m bot.main
 """
 
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher
-from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 
 from bot.config import config
 from bot.database.models import init_database
-
-# Handlers
 from bot.handlers import common, tasks, goals, habits, today
 
 
@@ -29,39 +33,48 @@ logger = logging.getLogger(__name__)
 async def main():
     """Головна функція запуску бота."""
     
-    # Перевіряємо конфігурацію
+    # Валідація конфігурації
     try:
         config.validate()
     except ValueError as e:
-        logger.error(f"Configuration error: {e}")
+        logger.error(f"❌ Помилка конфігурації: {e}")
         return
     
-    # Ініціалізуємо базу даних
-    logger.info("Initializing database...")
+    # Ініціалізація бази даних
+    logger.info("📦 Ініціалізація бази даних...")
     await init_database()
     
-    # Створюємо бота та диспетчер
+    # Створення бота
     bot = Bot(
         token=config.BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
+    
+    # Створення диспетчера
     dp = Dispatcher()
     
-    # Реєструємо handlers
+    # Реєстрація роутерів
     dp.include_router(common.router)
     dp.include_router(tasks.router)
     dp.include_router(goals.router)
     dp.include_router(habits.router)
     dp.include_router(today.router)
     
-    # Видаляємо webhook (якщо був) і запускаємо polling
-    logger.info("Starting bot...")
-    await bot.delete_webhook(drop_pending_updates=True)
+    # Запуск
+    logger.info("🚀 Бот запускається...")
     
     try:
-        await dp.start_polling(bot)
+        # Видаляємо webhook якщо є
+        await bot.delete_webhook(drop_pending_updates=True)
+        
+        # Запускаємо polling
+        await dp.start_polling(
+            bot,
+            allowed_updates=dp.resolve_used_update_types()
+        )
     finally:
         await bot.session.close()
+        logger.info("👋 Бот зупинено.")
 
 
 if __name__ == "__main__":

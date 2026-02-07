@@ -34,7 +34,6 @@ async def cmd_tasks(message: Message):
         await message.answer(text, parse_mode="HTML")
         return
     
-    # Форматуємо список
     text = uk.TASKS['title_today'] + "\n\n"
     
     # Групуємо по пріоритету
@@ -70,7 +69,6 @@ async def cmd_tasks(message: Message):
                 
                 text += f"  {status} [{t['id']}] {t['title']}{deadline_str}{goal_str}\n"
     
-    # Рахуємо виконані
     done = sum(1 for t in tasks if t['is_completed'])
     total = len(tasks)
     text += f"\n{uk.TASKS['completed_count'].format(done=done, total=total)}"
@@ -168,7 +166,6 @@ async def task_deadline(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     
-    # Визначаємо дату
     deadline = None
     if deadline_type == "today":
         deadline = date.today().isoformat()
@@ -176,7 +173,6 @@ async def task_deadline(callback: CallbackQuery, state: FSMContext):
         deadline = (date.today() + timedelta(days=1)).isoformat()
     elif deadline_type == "week":
         deadline = (date.today() + timedelta(days=7)).isoformat()
-    # none — deadline залишається None
     
     await state.update_data(deadline=deadline)
     await state.set_state(TaskCreation.time)
@@ -194,7 +190,6 @@ async def task_deadline_custom(message: Message, state: FSMContext):
     text = message.text.strip()
     
     try:
-        # Парсимо дату
         if "." in text:
             parts = text.split(".")
             if len(parts) == 2:
@@ -205,10 +200,10 @@ async def task_deadline_custom(message: Message, state: FSMContext):
             
             deadline = date(int(year), int(month), int(day)).isoformat()
         else:
-            await message.answer("❌ Невірний формат. Введи дату як ДД.ММ або ДД.ММ.РРРР")
+            await message.answer(uk.ERRORS['invalid_date'])
             return
     except ValueError:
-        await message.answer("❌ Невірна дата. Спробуй ще раз.")
+        await message.answer(uk.ERRORS['invalid_date'])
         return
     
     await state.update_data(deadline=deadline)
@@ -234,7 +229,6 @@ async def task_time(callback: CallbackQuery, state: FSMContext):
     scheduled_time = None if time_value == "none" else time_value
     await state.update_data(scheduled_time=scheduled_time)
     
-    # Перевіряємо чи є проєкти
     user_id = callback.from_user.id
     projects = await queries.get_projects(user_id)
     
@@ -259,7 +253,6 @@ async def task_time_custom(message: Message, state: FSMContext):
     """Отримуємо кастомний час."""
     text = message.text.strip()
     
-    # Валідуємо час
     try:
         if ":" not in text:
             raise ValueError
@@ -268,7 +261,7 @@ async def task_time_custom(message: Message, state: FSMContext):
             raise ValueError
         scheduled_time = f"{int(hours):02d}:{int(minutes):02d}"
     except ValueError:
-        await message.answer("❌ Невірний формат. Введи час як ГГ:ХХ (наприклад, 14:30)")
+        await message.answer(uk.ERRORS['invalid_time'])
         return
     
     await state.update_data(scheduled_time=scheduled_time)
@@ -321,7 +314,6 @@ async def task_recurring(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     
-    # Зберігаємо тип повторення
     recurrence_rule = None if recurring_type == "none" else recurring_type
     await state.update_data(
         is_recurring=recurrence_rule is not None,
@@ -329,7 +321,6 @@ async def task_recurring(callback: CallbackQuery, state: FSMContext):
         recurrence_days=None
     )
     
-    # Створюємо задачу
     await _create_task(callback, state)
 
 
@@ -369,7 +360,6 @@ async def task_days_done(callback: CallbackQuery, state: FSMContext):
         recurrence_days=recurrence_days
     )
     
-    # Створюємо задачу
     await _create_task(callback, state)
 
 
@@ -392,7 +382,6 @@ async def _create_task(callback: CallbackQuery, state: FSMContext):
     
     await state.clear()
     
-    # Форматуємо відповідь
     priority_labels = ["🔴 Терміново", "🟠 Високий", "🟡 Середній", "🟢 Низький"]
     deadline_str = data.get('deadline', 'Без дедлайну') or 'Без дедлайну'
     time_str = data.get('scheduled_time', 'Без часу') or 'Без часу'
@@ -460,7 +449,6 @@ async def callback_task_done(callback: CallbackQuery):
             uk.TASKS['marked_done'].format(title=task['title'] if task else ''),
             show_alert=True
         )
-        # Оновлюємо список
         await cmd_tasks(callback.message)
     else:
         await callback.answer("❌ Помилка", show_alert=True)

@@ -8,7 +8,9 @@ from bot.locales import uk
 # Словник доступних мов
 LANGUAGES = {
     'uk': uk,
-    # 'en': en,  # Додати пізніше
+    # 'en': en,  # Заглушка
+    # 'de': de,  # Заглушка
+    # 'ru': ru,  # Заглушка
 }
 
 DEFAULT_LANGUAGE = 'uk'
@@ -50,3 +52,8 @@ def get_text(key: str, lang: str = None, **kwargs) -> str:
 
 # Короткий alias
 _ = get_text
+
+
+def t(key: str, lang: str = 'uk') -> str:
+    """Швидкий доступ до тексту."""
+    return get_text(key, lang)

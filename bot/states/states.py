@@ -2,7 +2,7 @@
 FSM States — всі стани діалогів в одному місці.
 LifeHub Bot v4.0
 
-ВАЖЛИВО: Всі стани тут, не створювати окремих файлів!
+ВАЖЛИВО: Всі стани тут, НЕ створювати окремих файлів!
 """
 
 from aiogram.fsm.state import State, StatesGroup
@@ -93,13 +93,19 @@ class HabitEdit(StatesGroup):
 # ╚════════════════════════════════════════════════════════════════════════════╝
 
 class RecurringTaskCreation(StatesGroup):
-    """Створення повторюваної задачі (без streak)."""
+    """
+    Створення повторюваної задачі.
+    
+    ВАЖЛИВО: Recurring Task ≠ Habit!
+    - Recurring: для фіксованих подій (школа, робота), статистика, БЕЗ streak
+    - Habit: для формування поведінки, streak tracking, мотивація
+    """
     title = State()
     recurrence = State()      # daily, weekdays, custom
     recurrence_days = State() # Дні для custom
     time_start = State()      # Час початку
     time_end = State()        # Час завершення
-    is_fixed = State()        # Фіксований час?
+    is_fixed = State()        # Фіксований час? (школа = True)
     goal = State()            # Прив'язка до проєкту
     confirm = State()
 

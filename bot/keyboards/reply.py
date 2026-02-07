@@ -4,7 +4,6 @@ LifeHub Bot v4.0
 """
 
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
-from bot.locales import uk
 
 
 def get_main_menu() -> ReplyKeyboardMarkup:
@@ -73,29 +72,6 @@ def get_yes_no_keyboard() -> ReplyKeyboardMarkup:
                 KeyboardButton(text="Так"),
                 KeyboardButton(text="Ні")
             ]
-        ],
-        resize_keyboard=True
-    )
-
-
-def get_weekdays_keyboard(selected: list = None) -> ReplyKeyboardMarkup:
-    """Клавіатура вибору днів тижня."""
-    selected = selected or []
-    days = [
-        ("Пн", 1), ("Вт", 2), ("Ср", 3), ("Чт", 4),
-        ("Пт", 5), ("Сб", 6), ("Нд", 7)
-    ]
-    
-    buttons = []
-    for name, num in days:
-        mark = "✅" if num in selected else "⬜"
-        buttons.append(KeyboardButton(text=f"{mark} {name}"))
-    
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            buttons[:4],  # Пн-Чт
-            buttons[4:],  # Пт-Нд
-            [KeyboardButton(text="✅ Готово"), KeyboardButton(text="❌ Скасувати")]
         ],
         resize_keyboard=True
     )

@@ -13,26 +13,14 @@ def get_task_actions(task_id: int, is_completed: bool = False) -> InlineKeyboard
     builder = InlineKeyboardBuilder()
     
     if not is_completed:
-        builder.button(
-            text="✅ Виконати",
-            callback_data=f"task:done:{task_id}"
-        )
+        builder.button(text="✅ Виконати", callback_data=f"task:done:{task_id}")
     else:
-        builder.button(
-            text="↩️ Повернути",
-            callback_data=f"task:undone:{task_id}"
-        )
+        builder.button(text="↩️ Повернути", callback_data=f"task:undone:{task_id}")
     
-    builder.button(
-        text="✏️",
-        callback_data=f"task:edit:{task_id}"
-    )
-    builder.button(
-        text="🗑",
-        callback_data=f"task:delete:{task_id}"
-    )
+    builder.button(text="✏️", callback_data=f"task:edit:{task_id}")
+    builder.button(text="🗑", callback_data=f"task:delete:{task_id}")
     
-    builder.adjust(1, 2)  # Перша кнопка окремо, наступні 2 в ряд
+    builder.adjust(1, 2)
     return builder.as_markup()
 
 
@@ -52,12 +40,9 @@ def get_tasks_list(tasks: List[Dict[str, Any]], page: int = 0, per_page: int = 5
         priority = priority_icons[task.get('priority', 2)]
         
         text = f"{status} {priority} {task['title'][:30]}"
-        builder.button(
-            text=text,
-            callback_data=f"task:view:{task['id']}"
-        )
+        builder.button(text=text, callback_data=f"task:view:{task['id']}")
     
-    builder.adjust(1)  # По одній кнопці в ряд
+    builder.adjust(1)
     
     # Пагінація
     pagination = []
@@ -81,9 +66,7 @@ def get_tasks_list(tasks: List[Dict[str, Any]], page: int = 0, per_page: int = 5
         builder.row(*pagination)
     
     # Кнопка додавання
-    builder.row(
-        InlineKeyboardButton(text="➕ Додати задачу", callback_data="task:add")
-    )
+    builder.row(InlineKeyboardButton(text="➕ Додати задачу", callback_data="task:add"))
     
     return builder.as_markup()
 
@@ -134,7 +117,7 @@ def get_goal_keyboard(projects: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
     """Вибір проєкту для прив'язки."""
     builder = InlineKeyboardBuilder()
     
-    for project in projects[:10]:  # Максимум 10
+    for project in projects[:10]:
         builder.button(
             text=f"📁 {project['title'][:25]}",
             callback_data=f"task:goal:{project['id']}"
@@ -171,10 +154,7 @@ def get_weekdays_inline(selected: List[int] = None) -> InlineKeyboardMarkup:
     
     for name, num in days:
         mark = "✅" if num in selected else "⬜"
-        builder.button(
-            text=f"{mark} {name}",
-            callback_data=f"task:day:{num}"
-        )
+        builder.button(text=f"{mark} {name}", callback_data=f"task:day:{num}")
     
     builder.button(text="✅ Готово", callback_data="task:days:done")
     

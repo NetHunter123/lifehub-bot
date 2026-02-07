@@ -1,8 +1,9 @@
 """
-Обробники цілей (project, target, metric).
+Обробники цілей: project, target, metric.
 LifeHub Bot v4.0
 
-ВАЖЛИВО: Habits — окремий файл handlers/habits.py
+ВАЖЛИВО: Habits — в окремому файлі handlers/habits.py!
+Goals тут: тільки project, target, metric.
 """
 
 from datetime import date, timedelta
@@ -27,7 +28,7 @@ router = Router()
 
 @router.message(Command("goals"))
 async def cmd_goals(message: Message):
-    """Показати всі цілі та проєкти."""
+    """Показати всі цілі (project, target, metric)."""
     user_id = message.from_user.id
     goals = await queries.get_all_goals(user_id, status='active')
     
@@ -35,8 +36,10 @@ async def cmd_goals(message: Message):
     goals = [g for g in goals if g['goal_type'] in ('project', 'target', 'metric')]
     
     if not goals:
-        text = f"{uk.GOALS['title_all']}\n\n{uk.GOALS['empty']}"
-        await message.answer(text, parse_mode="HTML")
+        await message.answer(
+            f"{uk.GOALS['title_all']}\n\n{uk.GOALS['empty']}",
+            parse_mode="HTML"
+        )
         return
     
     text = uk.GOALS['title_all'] + "\n\n"
@@ -47,41 +50,33 @@ async def cmd_goals(message: Message):
     metrics = [g for g in goals if g['goal_type'] == 'metric']
     
     if projects:
-        text += "<b>📁 Проєкти:</b>\n"
-        for p in projects:
-            progress = p.get('progress', 0)
-            bar = _progress_bar(progress)
-            text += f"  • {p['title']} {bar} {progress}%\n"
+        text += "<b>📁 ПРОЄКТИ:</b>\n"
+        for g in projects:
+            progress = g.get('progress', 0)
+            text += f"  • [{g['id']}] {g['title']} — {progress}%\n"
         text += "\n"
     
     if targets:
-        text += "<b>🎯 Цілі (Targets):</b>\n"
-        for t in targets:
-            current = t.get('current_value', 0)
-            target = t.get('target_value', 1)
-            unit = t.get('unit', '')
-            progress = t.get('progress', 0)
-            bar = _progress_bar(progress)
-            text += f"  • {t['title']} ({current}/{target} {unit}) {bar}\n"
+        text += "<b>🎯 ЦІЛІ:</b>\n"
+        for g in targets:
+            current = g.get('current_value', 0) or 0
+            target = g.get('target_value', 1) or 1
+            unit = g.get('unit', '')
+            text += f"  • [{g['id']}] {g['title']} — {current}/{target} {unit}\n"
         text += "\n"
     
     if metrics:
-        text += "<b>📊 Метрики:</b>\n"
-        for m in metrics:
-            text += f"  • {m['title']}\n"
+        text += "<b>📊 МЕТРИКИ:</b>\n"
+        for g in metrics:
+            min_v = g.get('target_min') or '?'
+            max_v = g.get('target_max') or '?'
+            text += f"  • [{g['id']}] {g['title']} ({min_v}-{max_v})\n"
     
     await message.answer(
         text,
         parse_mode="HTML",
         reply_markup=kb.get_goals_list(goals)
     )
-
-
-def _progress_bar(progress: int, length: int = 10) -> str:
-    """Генерує текстовий прогрес-бар."""
-    filled = int(progress / 100 * length)
-    empty = length - filled
-    return f"[{'█' * filled}{'░' * empty}]"
 
 
 @router.message(Command("goal_add"))
@@ -124,18 +119,93 @@ async def goal_type(callback: CallbackQuery, state: FSMContext):
     goal_type = callback.data.replace("goal:type:", "")
     await state.update_data(goal_type=goal_type)
     
-    await state.set_state(GoalCreation.description)
-    await callback.message.edit_text(
-        uk.GOALS['create_description'],
-        parse_mode="HTML"
-    )
+    if goal_type == "target":
+        # Для Target — питаємо target_value
+        await state.set_state(GoalCreation.target_value)
+        await callback.message.edit_text(uk.GOALS['create_target_value'])
+    elif goal_type == "metric":
+        # Для Metric — питаємо range
+        await state.set_state(GoalCreation.target_range)
+        await callback.message.edit_text(uk.GOALS['create_target_range'])
+    else:
+        # Для Project — питаємо опис
+        await state.set_state(GoalCreation.description)
+        await callback.message.edit_text(
+            uk.GOALS['create_description'],
+            reply_markup=None
+        )
+        await callback.message.answer(
+            "Введи опис або натисни кнопку:",
+            reply_markup=get_skip_cancel_keyboard()
+        )
     
-    # Показуємо reply клавіатуру
-    await callback.message.answer(
-        "⬇️",
-        reply_markup=get_skip_cancel_keyboard()
-    )
     await callback.answer()
+
+
+@router.message(GoalCreation.target_value)
+async def goal_target_value(message: Message, state: FSMContext):
+    """Отримуємо цільове значення для Target."""
+    if message.text == "❌ Скасувати":
+        await state.clear()
+        await message.answer(uk.CANCELLED, reply_markup=get_main_menu())
+        return
+    
+    try:
+        target_value = float(message.text.replace(",", "."))
+    except ValueError:
+        await message.answer(uk.ERRORS['invalid_number'])
+        return
+    
+    await state.update_data(target_value=target_value)
+    await state.set_state(GoalCreation.unit)
+    
+    await message.answer(uk.GOALS['create_unit'])
+
+
+@router.message(GoalCreation.unit)
+async def goal_unit(message: Message, state: FSMContext):
+    """Отримуємо одиницю виміру."""
+    if message.text == "❌ Скасувати":
+        await state.clear()
+        await message.answer(uk.CANCELLED, reply_markup=get_main_menu())
+        return
+    
+    await state.update_data(unit=message.text)
+    await state.set_state(GoalCreation.deadline)
+    
+    await message.answer(
+        uk.GOALS['create_deadline'],
+        reply_markup=kb.get_deadline_keyboard()
+    )
+
+
+@router.message(GoalCreation.target_range)
+async def goal_target_range(message: Message, state: FSMContext):
+    """Отримуємо діапазон для Metric."""
+    if message.text == "❌ Скасувати":
+        await state.clear()
+        await message.answer(uk.CANCELLED, reply_markup=get_main_menu())
+        return
+    
+    try:
+        if "-" in message.text:
+            parts = message.text.split("-")
+            target_min = float(parts[0].strip().replace(",", "."))
+            target_max = float(parts[1].strip().replace(",", "."))
+        else:
+            await message.answer("❌ Введи діапазон у форматі МІН-МАКС (наприклад: 73-77)")
+            return
+    except (ValueError, IndexError):
+        await message.answer("❌ Введи діапазон у форматі МІН-МАКС (наприклад: 73-77)")
+        return
+    
+    await state.update_data(target_min=target_min, target_max=target_max)
+    await state.set_state(GoalCreation.deadline)
+    
+    await message.answer(
+        uk.GOALS['create_deadline'],
+        reply_markup=kb.get_deadline_keyboard()
+    )
 
 
 @router.message(GoalCreation.description)
@@ -148,36 +218,8 @@ async def goal_description(message: Message, state: FSMContext):
     
     description = None if message.text == "⏭ Пропустити" else message.text
     await state.update_data(description=description)
-    
-    # Перевіряємо чи є проєкти для вкладення
-    user_id = message.from_user.id
-    projects = await queries.get_projects(user_id)
-    
-    if projects:
-        await state.set_state(GoalCreation.parent)
-        await message.answer(
-            uk.GOALS['create_parent'],
-            reply_markup=kb.get_parent_keyboard(projects)
-        )
-    else:
-        await _ask_deadline(message, state)
-
-
-@router.callback_query(GoalCreation.parent, F.data.startswith("goal:parent:"))
-async def goal_parent(callback: CallbackQuery, state: FSMContext):
-    """Отримуємо батьківський проєкт."""
-    parent_value = callback.data.replace("goal:parent:", "")
-    
-    parent_id = None if parent_value == "none" else int(parent_value)
-    await state.update_data(parent_id=parent_id)
-    
-    await _ask_deadline(callback.message, state)
-    await callback.answer()
-
-
-async def _ask_deadline(message: Message, state: FSMContext):
-    """Питаємо про дедлайн."""
     await state.set_state(GoalCreation.deadline)
+    
     await message.answer(
         uk.GOALS['create_deadline'],
         reply_markup=kb.get_deadline_keyboard()
@@ -195,77 +237,79 @@ async def goal_deadline(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     
-    # Визначаємо дату
     deadline = None
     today = date.today()
     
     if deadline_type == "month":
         # Кінець поточного місяця
-        if today.month == 12:
-            deadline = date(today.year + 1, 1, 1) - timedelta(days=1)
-        else:
-            deadline = date(today.year, today.month + 1, 1) - timedelta(days=1)
-        deadline = deadline.isoformat()
+        next_month = today.replace(day=28) + timedelta(days=4)
+        deadline = (next_month - timedelta(days=next_month.day)).isoformat()
     elif deadline_type == "quarter":
         # Кінець кварталу
         quarter_end_month = ((today.month - 1) // 3 + 1) * 3
         if quarter_end_month > 12:
-            deadline = date(today.year + 1, 3, 31)
-        else:
-            next_month = quarter_end_month + 1 if quarter_end_month < 12 else 1
-            next_year = today.year if quarter_end_month < 12 else today.year + 1
-            deadline = date(next_year, next_month, 1) - timedelta(days=1)
-        deadline = deadline.isoformat()
+            quarter_end_month = 12
+        deadline = date(today.year, quarter_end_month, 28).isoformat()
     elif deadline_type == "year":
         deadline = date(today.year, 12, 31).isoformat()
-    # none — deadline залишається None
     
     await state.update_data(deadline=deadline)
     
-    # В залежності від типу цілі — різні наступні кроки
-    data = await state.get_data()
-    goal_type = data.get('goal_type')
+    # Перевіряємо чи є проєкти для вибору батьківського
+    user_id = callback.from_user.id
+    projects = await queries.get_projects(user_id)
     
-    if goal_type == 'target':
-        await state.set_state(GoalCreation.target_value)
-        await callback.message.edit_text(uk.GOALS['create_target_value'])
-    elif goal_type == 'metric':
-        await state.set_state(GoalCreation.target_range)
-        await callback.message.edit_text(uk.GOALS['create_target_range'])
-    else:  # project
-        await _ask_tags(callback, state)
+    data = await state.get_data()
+    # Project не може бути дочірнім до себе, тому показуємо вибір тільки для target/metric
+    if projects and data.get('goal_type') != 'project':
+        await state.set_state(GoalCreation.parent)
+        await callback.message.edit_text(
+            uk.GOALS['create_parent'],
+            reply_markup=kb.get_parent_keyboard(projects)
+        )
+    else:
+        await state.set_state(GoalCreation.domain_tags)
+        await callback.message.edit_text(
+            uk.GOALS['create_tags'],
+            reply_markup=kb.get_domain_tags_keyboard([])
+        )
     
     await callback.answer()
 
 
 @router.message(GoalCreation.deadline_custom)
 async def goal_deadline_custom(message: Message, state: FSMContext):
-    """Кастомна дата дедлайну."""
+    """Отримуємо кастомну дату дедлайну."""
     text = message.text.strip()
     
     try:
-        parts = text.split(".")
-        if len(parts) == 3:
-            day, month, year = parts
+        if "." in text:
+            parts = text.split(".")
+            if len(parts) == 3:
+                day, month, year = parts
+            else:
+                day, month = parts
+                year = date.today().year
             deadline = date(int(year), int(month), int(day)).isoformat()
         else:
-            await message.answer("❌ Введи дату як ДД.ММ.РРРР")
+            await message.answer(uk.ERRORS['invalid_date'])
             return
     except ValueError:
-        await message.answer("❌ Невірна дата. Спробуй ще раз.")
+        await message.answer(uk.ERRORS['invalid_date'])
         return
     
     await state.update_data(deadline=deadline)
     
+    user_id = message.from_user.id
+    projects = await queries.get_projects(user_id)
     data = await state.get_data()
-    goal_type = data.get('goal_type')
     
-    if goal_type == 'target':
-        await state.set_state(GoalCreation.target_value)
-        await message.answer(uk.GOALS['create_target_value'])
-    elif goal_type == 'metric':
-        await state.set_state(GoalCreation.target_range)
-        await message.answer(uk.GOALS['create_target_range'])
+    if projects and data.get('goal_type') != 'project':
+        await state.set_state(GoalCreation.parent)
+        await message.answer(
+            uk.GOALS['create_parent'],
+            reply_markup=kb.get_parent_keyboard(projects)
+        )
     else:
         await state.set_state(GoalCreation.domain_tags)
         await message.answer(
@@ -274,73 +318,27 @@ async def goal_deadline_custom(message: Message, state: FSMContext):
         )
 
 
-@router.message(GoalCreation.target_value)
-async def goal_target_value(message: Message, state: FSMContext):
-    """Отримуємо цільове значення."""
-    try:
-        target_value = float(message.text.strip().replace(",", "."))
-    except ValueError:
-        await message.answer("❌ Введи число (наприклад: 24, 100, 5.5)")
-        return
+@router.callback_query(GoalCreation.parent, F.data.startswith("goal:parent:"))
+async def goal_parent(callback: CallbackQuery, state: FSMContext):
+    """Отримуємо батьківський проєкт."""
+    parent_value = callback.data.replace("goal:parent:", "")
     
-    await state.update_data(target_value=target_value)
-    await state.set_state(GoalCreation.unit)
+    parent_id = None if parent_value == "none" else int(parent_value)
+    await state.update_data(parent_id=parent_id)
     
-    await message.answer(uk.GOALS['create_unit'])
-
-
-@router.message(GoalCreation.unit)
-async def goal_unit(message: Message, state: FSMContext):
-    """Отримуємо одиницю виміру."""
-    await state.update_data(unit=message.text.strip())
     await state.set_state(GoalCreation.domain_tags)
-    
-    await message.answer(
-        uk.GOALS['create_tags'],
-        reply_markup=kb.get_domain_tags_keyboard([])
-    )
-
-
-@router.message(GoalCreation.target_range)
-async def goal_target_range(message: Message, state: FSMContext):
-    """Отримуємо діапазон для метрики."""
-    text = message.text.strip()
-    
-    try:
-        if "-" in text:
-            parts = text.split("-")
-            target_min = float(parts[0].strip().replace(",", "."))
-            target_max = float(parts[1].strip().replace(",", "."))
-        else:
-            await message.answer("❌ Введи діапазон як MIN-MAX (наприклад: 73-77)")
-            return
-    except (ValueError, IndexError):
-        await message.answer("❌ Невірний формат. Введи як MIN-MAX")
-        return
-    
-    await state.update_data(target_min=target_min, target_max=target_max)
-    await state.set_state(GoalCreation.domain_tags)
-    
-    await message.answer(
-        uk.GOALS['create_tags'],
-        reply_markup=kb.get_domain_tags_keyboard([])
-    )
-
-
-async def _ask_tags(callback: CallbackQuery, state: FSMContext):
-    """Питаємо про теги."""
     await state.update_data(selected_tags=[])
-    await state.set_state(GoalCreation.domain_tags)
+    
     await callback.message.edit_text(
         uk.GOALS['create_tags'],
-        parse_mode="HTML",
         reply_markup=kb.get_domain_tags_keyboard([])
     )
+    await callback.answer()
 
 
 @router.callback_query(GoalCreation.domain_tags, F.data.startswith("goal:tag:"))
-async def goal_select_tag(callback: CallbackQuery, state: FSMContext):
-    """Вибір тегу."""
+async def goal_tag_toggle(callback: CallbackQuery, state: FSMContext):
+    """Перемикання тегу."""
     tag = callback.data.replace("goal:tag:", "")
     data = await state.get_data()
     selected = data.get('selected_tags', [])
@@ -359,19 +357,11 @@ async def goal_select_tag(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(GoalCreation.domain_tags, F.data == "goal:tags:done")
 async def goal_tags_done(callback: CallbackQuery, state: FSMContext):
-    """Завершення вибору тегів."""
-    data = await state.get_data()
-    domain_tags = data.get('selected_tags', [])
-    
-    await state.update_data(domain_tags=domain_tags)
-    await _create_goal(callback, state)
-
-
-async def _create_goal(callback: CallbackQuery, state: FSMContext):
-    """Фінальне створення цілі."""
+    """Завершення вибору тегів і створення цілі."""
     data = await state.get_data()
     user_id = callback.from_user.id
     
+    # Створюємо ціль
     goal_id = await queries.create_goal(
         user_id=user_id,
         title=data['title'],
@@ -379,7 +369,7 @@ async def _create_goal(callback: CallbackQuery, state: FSMContext):
         description=data.get('description'),
         parent_id=data.get('parent_id'),
         deadline=data.get('deadline'),
-        domain_tags=data.get('domain_tags', []),
+        domain_tags=data.get('selected_tags', []),
         target_value=data.get('target_value'),
         unit=data.get('unit'),
         target_min=data.get('target_min'),
@@ -390,22 +380,21 @@ async def _create_goal(callback: CallbackQuery, state: FSMContext):
     
     # Форматуємо відповідь
     type_emojis = {'project': '📁', 'target': '🎯', 'metric': '📊'}
-    type_names = {'project': 'Проєкт', 'target': 'Ціль (Target)', 'metric': 'Метрика'}
     
-    parent_str = "—"
+    parent_str = "Без батьківського"
     if data.get('parent_id'):
         parent = await queries.get_goal_by_id(data['parent_id'], user_id)
         if parent:
             parent_str = parent['title']
     
-    tags_str = ", ".join(data.get('domain_tags', [])) or "—"
+    tags_str = ", ".join(data.get('selected_tags', [])) or "—"
     
     text = uk.GOALS['create_confirm'].format(
         type_emoji=type_emojis.get(data['goal_type'], '🎯'),
         title=data['title'],
-        goal_type=type_names.get(data['goal_type'], data['goal_type']),
+        goal_type=data['goal_type'],
         parent=parent_str,
-        deadline=data.get('deadline') or '—',
+        deadline=data.get('deadline') or 'Без дедлайну',
         tags=tags_str
     )
     
@@ -431,13 +420,6 @@ async def callback_goal_add(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "goals:list")
-async def callback_goals_list(callback: CallbackQuery):
-    """Повернутись до списку цілей."""
-    await cmd_goals(callback.message)
-    await callback.answer()
-
-
 @router.callback_query(F.data.startswith("goal:view:"))
 async def callback_goal_view(callback: CallbackQuery):
     """Переглянути деталі цілі."""
@@ -450,68 +432,35 @@ async def callback_goal_view(callback: CallbackQuery):
         await callback.answer("❌ Ціль не знайдено", show_alert=True)
         return
     
-    type_emojis = {'project': '📁', 'target': '🎯', 'metric': '📊'}
-    emoji = type_emojis.get(goal['goal_type'], '🎯')
+    type_labels = {
+        'project': '📁 Проєкт',
+        'target': '🎯 Ціль',
+        'metric': '📊 Метрика'
+    }
     
-    text = f"{emoji} <b>{goal['title']}</b>\n\n"
+    text = f"""
+{type_labels.get(goal['goal_type'], '🎯')} <b>{goal['title']}</b>
+
+📊 Прогрес: {goal.get('progress', 0)}%
+📅 Дедлайн: {goal.get('deadline') or 'Без дедлайну'}
+"""
+    
+    if goal['goal_type'] == 'target':
+        current = goal.get('current_value', 0) or 0
+        target = goal.get('target_value', 0) or 0
+        unit = goal.get('unit', '')
+        text += f"🎯 Значення: {current}/{target} {unit}\n"
+    
+    if goal['goal_type'] == 'metric':
+        min_v = goal.get('target_min') or '?'
+        max_v = goal.get('target_max') or '?'
+        text += f"📊 Діапазон: {min_v}-{max_v}\n"
     
     if goal.get('description'):
-        text += f"📝 {goal['description']}\n\n"
+        text += f"\n📝 {goal['description']}\n"
     
-    if goal['goal_type'] == 'project':
-        progress = goal.get('progress', 0)
-        bar = _progress_bar(progress)
-        text += f"📊 Прогрес: {bar} {progress}%\n"
-        
-        # Рахуємо дочірні
-        children = await queries.get_child_goals(goal_id, user_id)
-        tasks = await queries.get_tasks_by_goal(goal_id, user_id)
-        
-        if children:
-            text += f"🎯 Дочірні цілі: {len(children)}\n"
-        if tasks:
-            done_tasks = sum(1 for t in tasks if t['is_completed'])
-            text += f"📋 Задачі: {done_tasks}/{len(tasks)}\n"
-    
-    elif goal['goal_type'] == 'target':
-        current = goal.get('current_value', 0)
-        target = goal.get('target_value', 1)
-        unit = goal.get('unit', '')
-        progress = goal.get('progress', 0)
-        bar = _progress_bar(progress)
-        
-        text += f"🎯 Прогрес: {current}/{target} {unit} {bar} {progress}%\n"
-        
-        # Pace calculation
-        if goal.get('deadline'):
-            deadline = date.fromisoformat(goal['deadline'])
-            created = date.fromisoformat(goal['created_at'][:10])
-            today = date.today()
-            
-            days_total = (deadline - created).days
-            days_elapsed = (today - created).days
-            
-            if days_total > 0 and days_elapsed > 0:
-                expected = (days_elapsed / days_total) * target
-                if current >= expected:
-                    text += f"📈 {uk.GOALS['pace_on_track']}\n"
-                elif current >= expected * 0.8:
-                    text += f"⚠️ Трохи відстаєш\n"
-                else:
-                    text += f"🔴 {uk.GOALS['pace_behind']}\n"
-    
-    elif goal['goal_type'] == 'metric':
-        target_min = goal.get('target_min')
-        target_max = goal.get('target_max')
-        if target_min and target_max:
-            text += f"📊 Цільовий діапазон: {target_min}-{target_max}\n"
-    
-    if goal.get('deadline'):
-        text += f"📅 Дедлайн: {goal['deadline']}\n"
-    
-    tags = goal.get('domain_tags', [])
-    if tags:
-        text += f"🏷 Теги: {', '.join(tags)}\n"
+    if goal.get('domain_tags'):
+        text += f"🏷 Теги: {', '.join(goal['domain_tags'])}\n"
     
     await callback.message.edit_text(
         text,
@@ -521,14 +470,20 @@ async def callback_goal_view(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data == "goals:list")
+async def callback_goals_list(callback: CallbackQuery):
+    """Повернутись до списку цілей."""
+    await cmd_goals(callback.message)
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("goal:entry:"))
 async def callback_goal_entry(callback: CallbackQuery, state: FSMContext):
     """Почати додавання запису для Target/Metric."""
     goal_id = int(callback.data.split(":")[-1])
     
-    await state.clear()
-    await state.update_data(goal_id=goal_id)
     await state.set_state(GoalEntry.value)
+    await state.update_data(goal_id=goal_id)
     
     await callback.message.edit_text(uk.GOALS['entry_value'])
     await callback.answer()
@@ -537,22 +492,27 @@ async def callback_goal_entry(callback: CallbackQuery, state: FSMContext):
 @router.message(GoalEntry.value)
 async def goal_entry_value(message: Message, state: FSMContext):
     """Отримуємо значення запису."""
+    if message.text == "❌ Скасувати":
+        await state.clear()
+        await message.answer(uk.CANCELLED, reply_markup=get_main_menu())
+        return
+    
     try:
-        value = float(message.text.strip().replace(",", "."))
+        value = float(message.text.replace(",", "."))
     except ValueError:
-        await message.answer("❌ Введи число")
+        await message.answer(uk.ERRORS['invalid_number'])
         return
     
     data = await state.get_data()
-    goal_id = data['goal_id']
     user_id = message.from_user.id
     
-    await queries.add_goal_entry(goal_id, user_id, value)
+    await queries.add_goal_entry(data['goal_id'], user_id, value)
     
-    goal = await queries.get_goal_by_id(goal_id, user_id)
+    goal = await queries.get_goal_by_id(data['goal_id'], user_id)
     progress = goal.get('progress', 0) if goal else 0
     
     await state.clear()
+    
     await message.answer(
         uk.GOALS['entry_added'].format(progress=progress),
         reply_markup=get_main_menu()
@@ -580,7 +540,7 @@ async def callback_goal_delete(callback: CallbackQuery):
     goal_id = int(callback.data.split(":")[-1])
     
     await callback.message.edit_text(
-        "🗑 <b>Видалити ціль?</b>\n\nВесь прогрес буде втрачено.",
+        "🗑 <b>Видалити ціль?</b>\n\nЦю дію неможливо скасувати.",
         parse_mode="HTML",
         reply_markup=kb.get_delete_confirm(goal_id)
     )
@@ -596,7 +556,7 @@ async def callback_goal_delete_confirm(callback: CallbackQuery):
     success = await queries.delete_goal(goal_id, user_id)
     
     if success:
-        await callback.message.edit_text("🗑 Ціль видалено.")
+        await callback.message.edit_text(uk.GOALS['deleted'])
         await callback.answer("🗑 Видалено")
     else:
         await callback.answer("❌ Помилка", show_alert=True)
@@ -608,28 +568,23 @@ async def callback_goal_tasks(callback: CallbackQuery):
     goal_id = int(callback.data.split(":")[-1])
     user_id = callback.from_user.id
     
-    goal = await queries.get_goal_by_id(goal_id, user_id)
     tasks = await queries.get_tasks_by_goal(goal_id, user_id)
+    goal = await queries.get_goal_by_id(goal_id, user_id)
     
     if not tasks:
-        text = f"📁 <b>{goal['title']}</b>\n\n📋 Задач немає."
-    else:
-        text = f"📁 <b>{goal['title']}</b>\n\n📋 <b>Задачі:</b>\n"
-        for task in tasks:
-            status = "✅" if task['is_completed'] else "⬜"
-            text += f"  {status} [{task['id']}] {task['title']}\n"
+        await callback.answer("📭 Задач у проєкті немає", show_alert=True)
+        return
     
-    from aiogram.utils.keyboard import InlineKeyboardBuilder
-    builder = InlineKeyboardBuilder()
-    builder.button(text="➕ Додати задачу", callback_data=f"task:add_to_goal:{goal_id}")
-    builder.button(text="◀️ Назад", callback_data=f"goal:view:{goal_id}")
-    builder.adjust(1)
+    text = f"📁 <b>{goal['title']}</b>\n\n📋 Задачі:\n"
     
-    await callback.message.edit_text(
-        text,
-        parse_mode="HTML",
-        reply_markup=builder.as_markup()
-    )
+    for task in tasks:
+        status = "✅" if task['is_completed'] else "⬜"
+        text += f"  {status} [{task['id']}] {task['title']}\n"
+    
+    done = sum(1 for t in tasks if t['is_completed'])
+    text += f"\n📊 {done}/{len(tasks)}"
+    
+    await callback.message.edit_text(text, parse_mode="HTML")
     await callback.answer()
 
 
@@ -639,35 +594,35 @@ async def callback_goal_children(callback: CallbackQuery):
     goal_id = int(callback.data.split(":")[-1])
     user_id = callback.from_user.id
     
-    goal = await queries.get_goal_by_id(goal_id, user_id)
     children = await queries.get_child_goals(goal_id, user_id)
+    goal = await queries.get_goal_by_id(goal_id, user_id)
     
     if not children:
-        text = f"📁 <b>{goal['title']}</b>\n\n🎯 Дочірніх цілей немає."
-    else:
-        text = f"📁 <b>{goal['title']}</b>\n\n🎯 <b>Дочірні цілі:</b>\n"
-        type_emojis = {'project': '📁', 'habit': '✅', 'target': '🎯', 'metric': '📊'}
-        for child in children:
-            emoji = type_emojis.get(child['goal_type'], '🎯')
-            progress = child.get('progress', 0)
-            text += f"  {emoji} {child['title']} [{progress}%]\n"
+        await callback.answer("📭 Дочірніх цілей немає", show_alert=True)
+        return
     
-    from aiogram.utils.keyboard import InlineKeyboardBuilder
-    builder = InlineKeyboardBuilder()
-    builder.button(text="➕ Додати ціль", callback_data="goal:add")
-    builder.button(text="◀️ Назад", callback_data=f"goal:view:{goal_id}")
-    builder.adjust(1)
+    text = f"📁 <b>{goal['title']}</b>\n\n🎯 Дочірні цілі:\n"
     
-    await callback.message.edit_text(
-        text,
-        parse_mode="HTML",
-        reply_markup=builder.as_markup()
-    )
+    type_emojis = {'project': '📁', 'habit': '✅', 'target': '🎯', 'metric': '📊'}
+    
+    for child in children:
+        emoji = type_emojis.get(child['goal_type'], '🎯')
+        progress = child.get('progress', 0)
+        text += f"  {emoji} [{child['id']}] {child['title']} — {progress}%\n"
+    
+    await callback.message.edit_text(text, parse_mode="HTML")
     await callback.answer()
 
 
-# Ігноруємо натискання на headers
 @router.callback_query(F.data.startswith("goals:header:"))
 async def callback_goals_header(callback: CallbackQuery):
-    """Ігноруємо натискання на заголовки."""
+    """Ігноруємо кліки на заголовки."""
+    await callback.answer()
+
+
+@router.callback_query(F.data == "goal:cancel")
+async def callback_goal_cancel(callback: CallbackQuery, state: FSMContext):
+    """Скасування створення цілі."""
+    await state.clear()
+    await callback.message.edit_text(uk.CANCELLED)
     await callback.answer()

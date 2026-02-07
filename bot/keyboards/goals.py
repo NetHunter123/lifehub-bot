@@ -51,9 +51,7 @@ def get_goals_list(goals: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
     builder.adjust(1)
     
     # Кнопка додавання
-    builder.row(
-        InlineKeyboardButton(text="➕ Додати ціль", callback_data="goal:add")
-    )
+    builder.row(InlineKeyboardButton(text="➕ Додати ціль", callback_data="goal:add"))
     
     return builder.as_markup()
 
@@ -123,10 +121,7 @@ def get_domain_tags_keyboard(selected: List[str] = None) -> InlineKeyboardMarkup
     
     for name, tag in domains:
         mark = "✅" if tag in selected else "⬜"
-        builder.button(
-            text=f"{mark} {name}",
-            callback_data=f"goal:tag:{tag}"
-        )
+        builder.button(text=f"{mark} {name}", callback_data=f"goal:tag:{tag}")
     
     builder.button(text="✅ Готово", callback_data="goal:tags:done")
     

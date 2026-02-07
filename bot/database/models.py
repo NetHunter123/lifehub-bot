@@ -4,17 +4,29 @@ LifeHub Bot v4.0
 
 Таблиці:
 - user_settings
-- tasks (з recurring підтримкою)
+- tasks (one-time + recurring з is_fixed)
 - task_occurrences (для recurring tasks)
-- goals (project, habit, target, metric)
+- goals (project, habit, target, metric) — БЕЗ 'task' типу!
 - habit_logs
 - goal_entries
 - books (Фаза 3)
 - words (Фаза 3)
+
+ВИДАЛЕНО: time_blocks, time_block_skips (замінено на recurring tasks з is_fixed=1)
 """
 
 import aiosqlite
 from bot.config import config
+
+
+async def get_db() -> aiosqlite.Connection:
+    """
+    Єдина точка доступу до БД.
+    Використовуй ТІЛЬКИ цю функцію!
+    """
+    db = await aiosqlite.connect(config.DATABASE_PATH)
+    db.row_factory = aiosqlite.Row
+    return db
 
 
 async def init_database() -> None:
@@ -24,7 +36,9 @@ async def init_database() -> None:
     
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         
-        # ============== НАЛАШТУВАННЯ КОРИСТУВАЧА ==============
+        # ╔════════════════════════════════════════════════════════════════╗
+        # ║                    НАЛАШТУВАННЯ КОРИСТУВАЧА                     ║
+        # ╚════════════════════════════════════════════════════════════════╝
         await db.execute("""
             CREATE TABLE IF NOT EXISTS user_settings (
                 user_id INTEGER PRIMARY KEY,
@@ -36,7 +50,20 @@ async def init_database() -> None:
             )
         """)
         
-        # ============== ЗАДАЧІ ==============
+        # ╔════════════════════════════════════════════════════════════════╗
+        # ║                           ЗАДАЧІ                                ║
+        # ╚════════════════════════════════════════════════════════════════╝
+        # 
+        # Два типи:
+        # 1. One-time (is_recurring=0) — звичайні задачі з/без дедлайну
+        # 2. Recurring (is_recurring=1) — повторювані задачі
+        #    - is_fixed=1: фіксований час (школа, робота) — НЕ зсувається
+        #    - is_fixed=0: гнучкий час — можна перепланувати
+        #
+        # ВАЖЛИВО: Recurring tasks ≠ Habits!
+        # - Recurring: статистика виконання, БЕЗ streak
+        # - Habits: streak tracking, мотивація безперервністю
+        #
         await db.execute("""
             CREATE TABLE IF NOT EXISTS tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,21 +74,23 @@ async def init_database() -> None:
                 -- Пріоритет (Eisenhower: 0=urgent, 1=high, 2=medium, 3=low)
                 priority INTEGER DEFAULT 2,
                 
-                -- Час (розділені поля для гнучкості)
-                deadline DATE,                    -- Тільки дата
+                -- Час
+                deadline DATE,                    -- Тільки дата (для one-time)
                 scheduled_time TEXT,              -- '08:30' (час початку)
                 scheduled_end TEXT,               -- '12:30' (час завершення)
-                estimated_minutes INTEGER,        -- Тривалість
+                estimated_minutes INTEGER,        -- Орієнтовна тривалість
                 
                 -- Повторення
                 is_recurring INTEGER DEFAULT 0,   -- 0=one-time, 1=recurring
                 recurrence_rule TEXT,             -- 'daily', 'weekdays', 'weekly', 'custom'
-                recurrence_days TEXT,             -- '1,2,3,4' для custom (ISO weekday)
+                recurrence_days TEXT,             -- '1,2,3,4' для custom (ISO weekday: 1=Пн, 7=Нд)
                 
-                -- Фіксований час (не зсувається автоматично)
+                -- Фіксований час (для recurring)
+                -- is_fixed=1: "Школа 08:30-12:30" — не зсувається автоматично
+                -- is_fixed=0: "Прибирання" — можна перепланувати
                 is_fixed INTEGER DEFAULT 0,
                 
-                -- Прив'язка до проєкту
+                -- Прив'язка до проєкту (goal_type='project')
                 goal_id INTEGER,
                 
                 -- Статус (для one-time задач)
@@ -79,7 +108,16 @@ async def init_database() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS ix_tasks_goal ON tasks(goal_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS ix_tasks_recurring ON tasks(is_recurring)")
         
-        # ============== ВХОДЖЕННЯ ЗАДАЧ (для recurring) ==============
+        # ╔════════════════════════════════════════════════════════════════╗
+        # ║                    ВХОДЖЕННЯ ЗАДАЧ (Occurrences)                ║
+        # ╚════════════════════════════════════════════════════════════════╝
+        #
+        # Для recurring tasks — зберігає статус кожного дня.
+        # Це дозволяє:
+        # - Трекати статистику (виконано/пропущено)
+        # - Зберігати нотатки до конкретного дня
+        # - Рахувати occurrence_number (#1, #2, #3...)
+        #
         await db.execute("""
             CREATE TABLE IF NOT EXISTS task_occurrences (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,9 +141,18 @@ async def init_database() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS ix_task_occ_date ON task_occurrences(date)")
         await db.execute("CREATE INDEX IF NOT EXISTS ix_task_occ_task ON task_occurrences(task_id)")
         
-        # ============== ЦІЛІ (Goals v3) ==============
-        # Типи: project, habit, target, metric
-        # ВАЖЛИВО: 'task' — НЕ тип Goal, tasks — окрема таблиця!
+        # ╔════════════════════════════════════════════════════════════════╗
+        # ║                         ЦІЛІ (Goals v3)                         ║
+        # ╚════════════════════════════════════════════════════════════════╝
+        #
+        # 4 структурні типи (визначають логіку трекінгу):
+        # - project: багатокрокова ціль, auto-progress по children
+        # - habit: recurring поведінка, streak tracking
+        # - target: кількісна ціль (24 книги), progress bar + pace
+        # - metric: ongoing вимірювання (вага 75±2 кг), trend chart
+        #
+        # ВАЖЛИВО: 'task' — НЕ тип Goal! Tasks живуть в окремій таблиці!
+        #
         await db.execute("""
             CREATE TABLE IF NOT EXISTS goals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -117,17 +164,18 @@ async def init_database() -> None:
                 -- БЕЗ 'task' — tasks це окрема таблиця!
                 goal_type TEXT NOT NULL CHECK(goal_type IN ('project', 'habit', 'target', 'metric')),
                 
-                -- Ієрархія (тільки project може мати parent)
+                -- Ієрархія (project може містити інші goals)
                 parent_id INTEGER,
                 
-                -- Теги доменів (JSON array)
+                -- Теги доменів (JSON array) — тільки для фільтрації!
+                -- Приклад: ["health", "learning"]
                 domain_tags TEXT DEFAULT '[]',
                 
                 -- === Для Habit ===
                 frequency TEXT,                   -- 'daily', 'weekdays', '3_per_week', 'custom'
                 schedule_days TEXT,               -- '1,2,3,4,5' (ISO weekday: 1=Пн)
                 reminder_time TEXT,               -- '08:00'
-                duration_minutes INTEGER,
+                duration_minutes INTEGER,         -- Орієнтовна тривалість
                 current_streak INTEGER DEFAULT 0,
                 longest_streak INTEGER DEFAULT 0,
                 
@@ -157,7 +205,17 @@ async def init_database() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS ix_goals_parent ON goals(parent_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS ix_goals_status ON goals(status)")
         
-        # ============== ЛОГИ ЗВИЧОК ==============
+        # ╔════════════════════════════════════════════════════════════════╗
+        # ║                        ЛОГИ ЗВИЧОК                              ║
+        # ╚════════════════════════════════════════════════════════════════╝
+        #
+        # Кожен день — один запис для habit.
+        # status:
+        # - done: виконано (streak +1)
+        # - skipped: пропущено (streak зберігається)
+        # - missed: пропуск (streak = 0) — НЕ використовується напряму,
+        #           відсутність запису = missed
+        #
         await db.execute("""
             CREATE TABLE IF NOT EXISTS habit_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -178,7 +236,13 @@ async def init_database() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS ix_habit_logs_date ON habit_logs(date)")
         await db.execute("CREATE INDEX IF NOT EXISTS ix_habit_logs_goal ON habit_logs(goal_id)")
         
-        # ============== ЗАПИСИ ЦІЛЕЙ (для Target/Metric) ==============
+        # ╔════════════════════════════════════════════════════════════════╗
+        # ║                   ЗАПИСИ ЦІЛЕЙ (Target/Metric)                  ║
+        # ╚════════════════════════════════════════════════════════════════╝
+        #
+        # Для Target: накопичувальні записи (прочитав 1 книгу)
+        # Для Metric: точкові вимірювання (вага 75.2 кг)
+        #
         await db.execute("""
             CREATE TABLE IF NOT EXISTS goal_entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -198,7 +262,9 @@ async def init_database() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS ix_goal_entries_goal ON goal_entries(goal_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS ix_goal_entries_date ON goal_entries(date)")
         
-        # ============== КНИГИ (Фаза 3) ==============
+        # ╔════════════════════════════════════════════════════════════════╗
+        # ║                         КНИГИ (Фаза 3)                          ║
+        # ╚════════════════════════════════════════════════════════════════╝
         await db.execute("""
             CREATE TABLE IF NOT EXISTS books (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -220,7 +286,9 @@ async def init_database() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS ix_books_user ON books(user_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS ix_books_status ON books(status)")
         
-        # ============== СЛОВНИК (Фаза 3, SM-2) ==============
+        # ╔════════════════════════════════════════════════════════════════╗
+        # ║                       СЛОВНИК (Фаза 3, SM-2)                    ║
+        # ╚════════════════════════════════════════════════════════════════╝
         await db.execute("""
             CREATE TABLE IF NOT EXISTS words (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -246,7 +314,9 @@ async def init_database() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS ix_words_user ON words(user_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS ix_words_due ON words(due_date)")
         
-        # ============== МОТИВАЦІЙНІ ЦИТАТИ ==============
+        # ╔════════════════════════════════════════════════════════════════╗
+        # ║                     МОТИВАЦІЙНІ ЦИТАТИ                          ║
+        # ╚════════════════════════════════════════════════════════════════╝
         await db.execute("""
             CREATE TABLE IF NOT EXISTS quotes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -269,10 +339,3 @@ async def init_database() -> None:
         await db.commit()
         
         print("✅ База даних ініціалізована (v4.0)")
-
-
-async def get_db() -> aiosqlite.Connection:
-    """Повертає з'єднання з базою даних."""
-    db = await aiosqlite.connect(config.DATABASE_PATH)
-    db.row_factory = aiosqlite.Row
-    return db

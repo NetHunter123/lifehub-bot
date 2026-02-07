@@ -1,6 +1,9 @@
 """
 Inline клавіатури для /today dashboard.
 LifeHub Bot v4.0
+
+ВАЖЛИВО: time_blocks ВИДАЛЕНО!
+Замість них — recurring tasks з is_fixed=1.
 """
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -26,7 +29,13 @@ def get_today_keyboard(sort_mode: str = 'time') -> InlineKeyboardMarkup:
 
 
 def get_recurring_task_actions(task_id: int, occurrence_status: str) -> InlineKeyboardMarkup:
-    """Дії для recurring task."""
+    """
+    Дії для recurring task.
+    
+    ВАЖЛИВО: Recurring Task ≠ Habit!
+    - Recurring: статистика, БЕЗ streak
+    - Habit: streak tracking
+    """
     builder = InlineKeyboardBuilder()
     
     if occurrence_status == 'pending':
